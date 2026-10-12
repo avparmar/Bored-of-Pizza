@@ -32,6 +32,8 @@ export interface GameResult {
   staleDirectionRate: number;
   reportDelay: number;
   takeouts: number;
+  /** Fraction of seated diners who had a waiter at their table when they finished. */
+  watchedRate: number;
 }
 
 const CLOSE = 2;
@@ -128,6 +130,7 @@ export function runGame(cfg: Config, lineup: string[]): GameResult {
     staleDirectionRate: avg(log.map((r) => (r.staleDirection ? 1 : 0))),
     reportDelay: avg(log.map((r) => r.deliveredAt - r.orderedAt)),
     takeouts: game.takeouts,
+    watchedRate: game.tableFinishes ? game.watchedFinishes / game.tableFinishes : 0,
   };
 }
 
@@ -161,6 +164,7 @@ export interface BatchSummary {
   staleDirectionRate: number;
   reportDelay: number;
   takeoutsPerGame: number;
+  watchedRate: number;
 }
 
 /** Runs `games` games, rotating seats each game so no strategy is stuck with one corner. */
@@ -222,6 +226,7 @@ export function runBatch(
     staleDirectionRate: avg(results.map((r) => r.staleDirectionRate)),
     reportDelay: avg(results.map((r) => r.reportDelay)),
     takeoutsPerGame: avg(results.map((r) => r.takeouts)),
+    watchedRate: avg(results.map((r) => r.watchedRate)),
   };
 }
 
@@ -255,8 +260,23 @@ export function formatBatch(b: BatchSummary): string {
       `lead changes ${num(b.leadChanges)} · trend shifts recovered ${pct(b.recoveryRate)} ` +
       `(avg ${b.recoveryTime === null ? '—' : num(b.recoveryTime, 0) + 's'}) · ` +
       `report delay ${num(b.reportDelay)}s · ideal moved ${num(b.staleness, 2)} pts by delivery · ` +
-      `direction already wrong ${pct(b.staleDirectionRate)} · takeouts/game ${num(b.takeoutsPerGame)}`,
+      `direction already wrong ${pct(b.staleDirectionRate)} · diners watched by a waiter ${pct(b.watchedRate)} · ` +
+      `takeouts/game ${num(b.takeoutsPerGame)}`,
   );
   lines.push('');
   return lines.join('\n');
+}
+
+/**
+ * Geometry check: share of tables a waiter can reach within one eating time if it only
+ * starts walking once the diner sits down, from its restaurant corner and from mid-court.
+ */
+export function reachAfterSitDown(overrides: Partial<Config> = {}) {
+  const cfg = makeConfig(overrides);
+  const g = new Game(cfg);
+  const center = { x: cfg.courtSize / 2, y: cfg.courtSize / 2 };
+  const reach = (from: { x: number; y: number }) =>
+    g.tables.filter((tb) => Math.hypot(tb.pos.x - from.x, tb.pos.y - from.y) / cfg.waiterSpeed <= cfg.eatSec)
+      .length / g.tables.length;
+  return { fromCorner: reach(g.restaurantPos[0]), fromCenter: reach(center) };
 }

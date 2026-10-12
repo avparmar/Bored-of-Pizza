@@ -1,4 +1,4 @@
-import type { Action, Observation, Recipe } from '@bop/core';
+import { rawDistance, type Action, type Observation, type Recipe } from '@bop/core';
 import {
   Belief,
   GainTracker,
@@ -149,7 +149,119 @@ export const hawkBot = intelBot(
   null,
 );
 
+/**
+ * Uses everything a sharp human could: all intel, plus "doing the math" on public numbers.
+ * Each restaurant's average tip per pizza (change in money / change in customers served)
+ * reveals roughly how far its public recipe is from the ideal. With four recipes and four
+ * distance estimates, the bot searches for the ideal that best fits them, constrained by its
+ * intel intervals. Tip noise is the main defence against this.
+ */
+export const analystBot: BotFactory = () => {
+  let belief: Belief | null = null;
+  const history: { t: number; money: number[]; served: number[]; recipes: Recipe[] }[] = [];
+  const lastChange: number[] = [];
+  let lastRecipes: Recipe[] | null = null;
+  let best: Recipe | null = null;
+  const WINDOW = 30;
+  const LAG = 8; // money arrives ~walk + eat time after the customer is served
+
+  return {
+    name: 'analyst',
+    decide(obs) {
+      const { cfg, t } = obs;
+      if (!belief) {
+        belief = new Belief(cfg);
+        if (obs.startingIntel) {
+          const { ingredient, value } = obs.startingIntel;
+          belief.set(ingredient, value, value);
+        }
+      }
+      belief.update(obs, () => true);
+
+      // Track public numbers and when each recipe last changed.
+      obs.recipes.forEach((r, i) => {
+        if (!lastRecipes || !sameRecipe(r, lastRecipes[i])) lastChange[i] = t;
+      });
+      lastRecipes = obs.recipes.map((r) => [...r] as Recipe);
+      history.push({ t, money: [...obs.money], served: [...obs.served], recipes: lastRecipes });
+      while (history.length && history[0].t < t - WINDOW - LAG - 2) history.shift();
+
+      const actions: Action[] = [];
+      if (Math.round(t) % 3 === 0) {
+        // Estimate each restaurant's raw distance from its recent tip per pizza.
+        const at = (time: number) => history.find((h) => h.t >= time) ?? history[0];
+        const now = history[history.length - 1];
+        const estimates: { recipe: Recipe; dist: number; w: number }[] = [];
+        for (let r = 0; r < obs.recipes.length; r++) {
+          const start = Math.max(t - WINDOW, lastChange[r] + LAG);
+          if (t - start < 10) continue;
+          const dm = now.money[r] - at(start).money[r];
+          const ds = at(t - LAG).served[r] - at(start - LAG).served[r];
+          if (ds < 2) continue;
+          const avgTip = Math.min(Math.max(dm / ds, 0.05), cfg.tipBase * 1.2);
+          const d = Math.max(0, -Math.log(avgTip / cfg.tipBase) / cfg.tipK) * (cfg.scale / 10);
+          // Tiny tips say "far away" but not how far: trust them less.
+          const w = (Math.min(ds, 6) / 6) * (avgTip > 1 ? 1 : 0.3);
+          estimates.push({ recipe: obs.recipes[r], dist: d, w });
+        }
+
+        const b = belief;
+        const score = (c: number[]) => {
+          let s = 0;
+          for (const e of estimates) {
+            const diff = rawDistance(c as Recipe, e.recipe) - e.dist;
+            s += e.w * diff * diff;
+          }
+          for (let i = 0; i < 4; i++) {
+            const out = Math.max(0, b.lo[i] - c[i], c[i] - b.hi[i]);
+            s += 3 * out * out;
+          }
+          return s;
+        };
+
+        // Hill-climb from a few starting points.
+        const starts: Recipe[] = [b.guess(), ...obs.recipes];
+        if (best) starts.push(best);
+        let bestScore = Infinity;
+        let bestC: number[] = b.guess();
+        for (const st of starts) {
+          let c = [...st];
+          let sc = score(c);
+          for (let iter = 0; iter < 60; iter++) {
+            let improved = false;
+            for (let i = 0; i < 4; i++) {
+              for (const step of [1, -1, 2, -2, 4, -4]) {
+                const v = c[i] + step;
+                if (v < 1 || v > cfg.scale) continue;
+                const n = [...c];
+                n[i] = v;
+                const ns = score(n);
+                if (ns < sc - 1e-9) {
+                  c = n;
+                  sc = ns;
+                  improved = true;
+                }
+              }
+            }
+            if (!improved) break;
+          }
+          if (sc < bestScore) {
+            bestScore = sc;
+            bestC = c;
+          }
+        }
+        best = bestC as Recipe;
+      }
+      const want = best ?? belief.guess();
+      if (!sameRecipe(want, obs.recipes[obs.me])) actions.push({ type: 'setRecipe', recipe: want });
+      actions.push(...waiterActions(obs, (r) => (r === obs.me ? 0 : 1)));
+      return actions;
+    },
+  };
+};
+
 export const STRATEGIES: Record<string, BotFactory> = {
+  analyst: analystBot,
   static: staticBot,
   searcher: searcherBot,
   copycat: copycatBot,

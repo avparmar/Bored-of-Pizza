@@ -87,13 +87,13 @@ export const defaultConfig: Config = {
   tipNoise: 0.2,
 
   shareWindow: 10,
-  shareP: 2,
+  shareP: 1,
   shareMaxAgeSec: 30,
   queuePenalty: 0.15,
 
   arrivalMeanSec: 1.5,
   serviceSec: 1.5,
-  eatSec: 7,
+  eatSec: 4.5,
   courtSize: 20,
   customerSpeed: 2.5,
   waiterSpeed: 3,

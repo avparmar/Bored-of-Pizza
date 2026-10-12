@@ -6,8 +6,9 @@ Runs Bored of Pizza games with bots, with no graphics, to tune the numbers in
 ```sh
 npm install
 npm test                      # unit tests for the rules
-npm run experiments           # full suite → sim/results/experiments.md (~1 min)
-npm run experiments -- 50     # quicker, 50 games per batch
+npm run experiments -- round2        # suite → sim/results/round2.md (~1.5 min)
+npm run experiments -- round2 50     # quicker, 50 games per batch
+npm run experiments -- round1        # the original suite, with its settings pinned
 
 # One custom batch: any Config key can be overridden with --set
 npm run sim -- --games 200 --lineup searcher,hybrid,hawk,copycat --set magnitude=own --set eatSec=5
@@ -22,6 +23,7 @@ npm run sim -- --games 200 --lineup searcher,hybrid,hawk,copycat --set magnitude
 | `copycat` | No intel; copies whoever earned the most in the last 30s | Idle |
 | `hybrid` | Narrows from **all** intel; jumps to a rival's recipe if they earn 30% more | Own customers first, then anyone's |
 | `hawk` | Narrows from all intel | The current leader's customers first |
+| `analyst` | Narrows from all intel, and also "does the math": each shop's tip per pizza (public money ÷ customers served) gives its rough distance from the ideal, so it searches for the ideal that best fits all four public recipes | Own customers first, then anyone's |
 
 Bots are deliberately simple. A mechanic that looks fine against them may still break
 against a clever human, so treat results as directional.

@@ -108,6 +108,10 @@ export class Game {
   readonly tipLog: TipLogEntry[] = [];
   readonly shiftTimes: number[] = [];
   takeouts = 0;
+  /** Customers who finished eating at a table. */
+  tableFinishes = 0;
+  /** ...of which had a waiter stationed at their table when they finished. */
+  watchedFinishes = 0;
 
   private customers = new Map<number, Customer>();
   private nextCustomerId = 1;
@@ -308,7 +312,11 @@ export class Game {
 
     if (c.table !== undefined) {
       const tb = this.tables[c.table];
-      if (tb.stationed) this.deliverReport(tb.stationed.owner, c, 'waiter');
+      this.tableFinishes++;
+      if (tb.stationed) {
+        this.watchedFinishes++;
+        this.deliverReport(tb.stationed.owner, c, 'waiter');
+      }
       tb.customer = null;
     }
     if (this.rng.next() < cfg.commentCardRate) this.deliverReport(c.restaurant, c, 'card');
