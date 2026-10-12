@@ -268,3 +268,4 @@ export const STRATEGIES: Record<string, BotFactory> = {
   hybrid: hybridBot,
   hawk: hawkBot,
 };
+export type { Bot, BotFactory } from './common.js';

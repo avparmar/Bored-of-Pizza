@@ -2,3 +2,4 @@ OUTLINE.md
 DESIGN.md
 .DS_Store
 node_modules/
+client/dist/

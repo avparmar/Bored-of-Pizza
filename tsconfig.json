@@ -7,7 +7,19 @@
     "noUncheckedIndexedAccess": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ]
   },
-  "include": ["core/src", "core/test", "sim/src"]
+  "include": [
+    "core/src",
+    "core/test",
+    "sim/src",
+    "client/src"
+  ]
 }

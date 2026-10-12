@@ -5,5 +5,7 @@
   "type": "module",
   "dependencies": {
     "@bop/core": "*"
-  }
+  },
+  "main": "src/bots/strategies.ts",
+  "types": "src/bots/strategies.ts"
 }
