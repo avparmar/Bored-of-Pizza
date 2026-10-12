@@ -1,0 +1,9 @@
+{
+  "name": "@bop/sim",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@bop/core": "*"
+  }
+}
