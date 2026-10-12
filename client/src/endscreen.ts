@@ -60,6 +60,8 @@ export function showEnd(s: Session, actions: { again: () => void; menu: () => vo
       <div class="legend">Total slider points off (lower is better). Dashed lines = trend shifts.
         ${Array.from({ length: n }, (_, p) => `<span><span class="swatch" style="background:${SHOP_COLORS[p]}"></span> ${p === s.human ? 'You' : SHOP_NAMES[p]}</span>`).join('')}</div>
       <canvas id="end-chart"></canvas>
+      <h3 style="margin:14px 0 4px">Money over time</h3>
+      <canvas id="end-money"></canvas>
       <p style="font-size:13px;color:#8a7a68">Final ideal recipe: <b>${g.ideal.join(' / ')}</b> (dough / sauce / cheese / toppings).</p>
       <div class="buttons">
         <button class="primary" id="end-again">Play again</button>
@@ -78,7 +80,8 @@ export function showEnd(s: Session, actions: { again: () => void; menu: () => vo
     URL.revokeObjectURL(a.href);
   };
 
-  drawChart(document.getElementById('end-chart') as HTMLCanvasElement, s);
+  drawChart(document.getElementById('end-chart') as HTMLCanvasElement, s, (sn, p) => rawDistance(sn.recipes[p], sn.ideal), 10, '');
+  drawChart(document.getElementById('end-money') as HTMLCanvasElement, s, (sn, p) => sn.money[p], 100, '$');
 }
 
 function fmt(t: number) {
@@ -86,7 +89,15 @@ function fmt(t: number) {
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 }
 
-function drawChart(canvas: HTMLCanvasElement, s: Session) {
+type Snap = Session['game']['snapshots'][number];
+
+function drawChart(
+  canvas: HTMLCanvasElement,
+  s: Session,
+  value: (sn: Snap, p: number) => number,
+  gridStep: number,
+  prefix: string,
+) {
   const g = s.game;
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth;
@@ -95,8 +106,9 @@ function drawChart(canvas: HTMLCanvasElement, s: Session) {
   canvas.height = h * dpr;
   const ctx = canvas.getContext('2d')!;
   ctx.scale(dpr, dpr);
-  const pad = { l: 34, r: 8, t: 8, b: 22 };
-  const maxY = Math.max(10, ...g.snapshots.flatMap((sn) => sn.recipes.map((r) => rawDistance(r, sn.ideal))));
+  const pad = { l: 40, r: 8, t: 8, b: 22 };
+  const maxY = Math.max(gridStep, ...g.snapshots.flatMap((sn) => sn.recipes.map((_, p) => value(sn, p))));
+  const step = Math.max(gridStep, Math.ceil(maxY / 5 / gridStep) * gridStep);
   const X = (t: number) => pad.l + (t / g.cfg.durationSec) * (w - pad.l - pad.r);
   const Y = (v: number) => pad.t + (1 - v / maxY) * (h - pad.t - pad.b);
 
@@ -104,12 +116,12 @@ function drawChart(canvas: HTMLCanvasElement, s: Session) {
   ctx.fillStyle = '#8a7a68';
   ctx.font = '11px system-ui';
   ctx.lineWidth = 1;
-  for (let v = 0; v <= maxY; v += 10) {
+  for (let v = 0; v <= maxY; v += step) {
     ctx.beginPath();
     ctx.moveTo(pad.l, Y(v));
     ctx.lineTo(w - pad.r, Y(v));
     ctx.stroke();
-    ctx.fillText(String(v), 6, Y(v) + 4);
+    ctx.fillText(`${prefix}${v}`, 2, Y(v) + 4);
   }
   for (let m = 0; m <= g.cfg.durationSec / 60; m += 2) ctx.fillText(`${m}:00`, X(m * 60) - 10, h - 6);
   ctx.setLineDash([4, 4]);
@@ -127,7 +139,7 @@ function drawChart(canvas: HTMLCanvasElement, s: Session) {
     ctx.beginPath();
     g.snapshots.forEach((sn, i) => {
       const x = X(sn.t);
-      const y = Y(rawDistance(sn.recipes[p], sn.ideal));
+      const y = Y(value(sn, p));
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });

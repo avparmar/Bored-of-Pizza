@@ -1,11 +1,12 @@
 import { Game, makeConfig, Rng, type Action, type Config, type GameEvent } from '@bop/core';
-import { STRATEGIES, type Bot } from '@bop/sim';
+import { STRATEGIES, strategy, type Bot, type BotSkill } from '@bop/sim';
 
 export type Seat = 'human' | keyof typeof STRATEGIES;
 
 export interface SessionOptions {
   seats: Seat[];
   overrides: Partial<Config>;
+  skill: BotSkill;
 }
 
 /**
@@ -32,7 +33,15 @@ export class Session {
     const h = opts.seats.indexOf('human');
     this.human = h >= 0 ? h : null;
     const rng = new Rng(cfg.seed * 7919 + 1);
-    this.bots = opts.seats.map((s, i) => (s === 'human' ? null : STRATEGIES[s](i, rng)));
+    this.bots = opts.seats.map((s, i) => (s === 'human' ? null : strategy(s, opts.skill)(i, rng)));
+    this.skill = opts.skill;
+  }
+
+  readonly skill: BotSkill;
+
+  /** Skip the rest of the blind pick phase. */
+  ready() {
+    this.game.act(this.human ?? 0, { type: 'ready' });
   }
 
   get done() {
@@ -83,6 +92,7 @@ export class Session {
       savedAt: new Date().toISOString(),
       config: g.cfg,
       seats: this.seats,
+      botSkill: this.skill,
       human: this.human,
       finalMoney: g.money,
       served: g.served,

@@ -160,3 +160,88 @@ export function waiterActions(
   }
   return actions;
 }
+
+/**
+ * An opening that doesn't give the tip-off away: the known ingredient is nudged by up to ±2,
+ * the rest are plausible random values.
+ */
+export function bluffOpening(obs: Observation, rng: Rng): Recipe {
+  const { scale } = obs.cfg;
+  const r = [0, 1, 2, 3].map(() => rng.int(Math.round(scale * 0.3), Math.round(scale * 0.7))) as Recipe;
+  if (obs.startingIntel) {
+    const { ingredient, value } = obs.startingIntel;
+    r[ingredient] = Math.max(1, Math.min(scale, value + rng.int(-2, 2)));
+  }
+  return r;
+}
+
+/**
+ * Wraps any bot so that it (1) picks a bluffing opening during the blind pick phase, and
+ * (2) keeps that opening until it has some intel (2 reports or 20s), so its tip-off isn't
+ * revealed the moment doors open. The inner bot still sees every observation.
+ */
+export function withOpening(inner: BotFactory): BotFactory {
+  return (player, rng) => {
+    const bot = inner(player, rng);
+    let opening: Recipe | null = null;
+    return {
+      name: bot.name,
+      decide(obs) {
+        if (obs.phase === 'pregame') {
+          opening ??= bluffOpening(obs, rng);
+          return [{ type: 'setRecipe', recipe: opening }];
+        }
+        const acts = bot.decide(obs);
+        const holding = opening !== null && obs.reports.length < 2 && obs.t < 20;
+        return holding ? acts.filter((a) => a.type !== 'setRecipe') : acts;
+      },
+    };
+  };
+}
+
+export interface HumanizeOptions {
+  /** Seconds between "looks" at the court. */
+  thinkEvery: number;
+  /** Delay before a decision takes effect: [min, max] seconds. */
+  reaction: [number, number];
+  /** Waiter orders allowed per look. */
+  waiterOrders: number;
+}
+
+export const HUMAN_LIKE: HumanizeOptions = { thinkEvery: 2, reaction: [0.8, 2], waiterOrders: 1 };
+
+/** Makes a bot play at human speed: it looks every few seconds, reacts late, and sends fewer waiters. */
+export function humanize(inner: BotFactory, opts: HumanizeOptions = HUMAN_LIKE): BotFactory {
+  return (player, rng) => {
+    const bot = inner(player, rng);
+    let lastThink = -Infinity;
+    const pending: { at: number; actions: Action[] }[] = [];
+    return {
+      name: bot.name,
+      decide(obs) {
+        if (obs.phase === 'pregame') return bot.decide(obs);
+        if (obs.t - lastThink >= opts.thinkEvery - 1e-9) {
+          lastThink = obs.t;
+          const acts = bot.decide(obs);
+          let orders = 0;
+          const kept = acts.filter((a) => {
+            if (a.type === 'setRecipe') return true;
+            return orders++ < opts.waiterOrders;
+          });
+          if (kept.length) {
+            const [lo, hi] = opts.reaction;
+            pending.push({ at: obs.t + lo + rng.next() * (hi - lo), actions: kept });
+          }
+        }
+        const due: Action[] = [];
+        for (let i = pending.length - 1; i >= 0; i--) {
+          if (pending[i].at <= obs.t + 1e-9) {
+            due.unshift(...pending[i].actions);
+            pending.splice(i, 1);
+          }
+        }
+        return due;
+      },
+    };
+  };
+}

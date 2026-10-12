@@ -51,6 +51,8 @@ export interface WaiterView {
   target: number | null;
   arriveAt: number;
   stationed: number | null;
+  /** Customer this waiter is waiting to follow to their table (private). */
+  follow: number | null;
 }
 
 /** A moving thing: position at time t is from→to, linearly between departAt and arriveAt. */
@@ -97,6 +99,10 @@ export interface Observation {
   t: number;
   me: number;
   cfg: Config;
+  /** 'pregame' = blind pick before doors open; rivals' recipes are hidden. */
+  phase: 'pregame' | 'open';
+  pregameLeft: number;
+  /** During pregame, rivals' entries are [0, 0, 0, 0] (hidden). */
   recipes: Recipe[];
   money: number[];
   queues: number[];
@@ -120,4 +126,8 @@ export type Action =
   | { type: 'setRecipe'; recipe: Recipe }
   | { type: 'assignWaiter'; idx: number; table: number | null }
   /** Send the first free waiter (home or walking back), nearest first. */
-  | { type: 'sendWaiter'; table: number };
+  | { type: 'sendWaiter'; table: number }
+  /** Have a free waiter follow one of YOUR customers to whatever table they pick. */
+  | { type: 'followCustomer'; customer: number }
+  /** Skip the rest of the blind pick phase. */
+  | { type: 'ready' };

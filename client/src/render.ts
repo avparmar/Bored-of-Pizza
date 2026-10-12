@@ -21,6 +21,9 @@ export class CourtRenderer {
   private size = 0;
   private popups: Popup[] = [];
   hoverTable: number | null = null;
+  hoverCustomer: number | null = null;
+  /** Where each customer was last drawn (world units), for click hit-testing. */
+  private customerPos = new Map<number, { pos: Vec; restaurant: number }>();
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
@@ -56,6 +59,28 @@ export class CourtRenderer {
       if (d < bd) {
         bd = d;
         best = tb.id;
+      }
+    }
+    return best;
+  }
+
+  /** Where a customer was last drawn, in canvas pixels (handy for tests and debugging). */
+  customerScreen(id: number): Vec | null {
+    const c = this.customerPos.get(id);
+    return c ? this.toScreen(c.pos) : null;
+  }
+
+  /** Your own customer under the cursor (not one who's leaving). */
+  customerAt(sx: number, sy: number, me: number): number | null {
+    const w = this.toWorld(sx, sy);
+    let best: number | null = null;
+    let bd = 0.7;
+    for (const [id, c] of this.customerPos) {
+      if (c.restaurant !== me) continue;
+      const d = Math.hypot(c.pos.x - w.x, c.pos.y - w.y);
+      if (d < bd) {
+        bd = d;
+        best = id;
       }
     }
     return best;
@@ -109,7 +134,8 @@ export class CourtRenderer {
 
       // Public recipe label, toward the middle of the court.
       const rec = obs.recipes[r];
-      const label = rec.map((v, i) => `${SHORT[i]}${v}`).join(' ');
+      const hidden = obs.phase === 'pregame' && r !== me;
+      const label = hidden ? 'D? S? C? T?' : rec.map((v, i) => `${SHORT[i]}${v}`).join(' ');
       // Sits in the margin outside the court, beside the shop, so nothing walks over it.
       const lp = this.toScreen({
         x: rp.x + (rp.x < S / 2 ? 5.6 : -5.6),
@@ -150,6 +176,10 @@ export class CourtRenderer {
     }
 
     // Customers
+    this.customerPos.clear();
+    const followed = new Set(
+      me === null ? [] : obs.myWaiters.filter((w) => w.follow !== null).map((w) => w.follow!),
+    );
     for (const c of obs.customers) {
       let pos = legPos(c, t);
       if (c.state === 'queued' || c.state === 'cooking') {
@@ -162,7 +192,17 @@ export class CourtRenderer {
         if (n > 0) pos = { x: door.x - dx * 0.2, y: door.y + dy * 0.9 * n };
       }
       if (c.state === 'seated') pos = { x: pos.x, y: pos.y - 0.55 };
+      if (c.state !== 'leaving') this.customerPos.set(c.id, { pos, restaurant: c.restaurant });
       const p = this.toScreen(pos);
+      if (followed.has(c.id) || c.id === this.hoverCustomer) {
+        ctx.strokeStyle = followed.has(c.id) ? '#111' : '#888';
+        ctx.lineWidth = 2;
+        ctx.setLineDash(followed.has(c.id) ? [] : [3, 3]);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, k * 0.55, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       const light = c.id % 3 === 0;
       ctx.fillStyle = light ? '#F7F7F7' : c.id % 3 === 1 ? '#2B2D42' : '#4A3B58';
       ctx.strokeStyle = '#1B1B24';
@@ -185,6 +225,23 @@ export class CourtRenderer {
       }
     }
 
+    // Your waiters waiting to follow a customer: line from waiter to that customer.
+    for (const mw of obs.myWaiters) {
+      if (mw.follow === null || me === null) continue;
+      const cp = this.customerPos.get(mw.follow);
+      if (!cp) continue;
+      const a = this.toScreen(mw.pos);
+      const b = this.toScreen(cp.pos);
+      ctx.strokeStyle = '#111';
+      ctx.setLineDash([2, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
     // Waiters
     for (const w of obs.waiters) {
       const pos = legPos(w, t);
@@ -201,8 +258,15 @@ export class CourtRenderer {
         ctx.stroke();
         ctx.setLineDash([]);
       }
-      const off = w.state === 'home' ? (w.idx === 0 ? -0.45 : 0.45) : 0;
-      const q = this.toScreen({ x: pos.x + off, y: pos.y + (w.stationed !== null ? 0.6 : 0) });
+      let drawAt = { x: pos.x, y: pos.y + (w.stationed !== null ? 0.6 : 0) };
+      if (w.state === 'home') {
+        // Stand beside the door, out of the queue (which runs along the court edge).
+        const door = obs.doorPos[w.owner];
+        const dx = door.x < S / 2 ? 1 : -1;
+        const dy = door.y < S / 2 ? 1 : -1;
+        drawAt = { x: door.x + dx * (1.0 + 0.95 * w.idx), y: door.y - dy * 0.3 };
+      }
+      const q = this.toScreen(drawAt);
       ctx.fillStyle = SHOP_COLORS[w.owner];
       ctx.strokeStyle = mine ? '#111' : '#fff';
       ctx.lineWidth = mine ? 3 : 2;

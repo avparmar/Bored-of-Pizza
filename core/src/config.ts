@@ -17,6 +17,8 @@ export interface Config {
   scale: number;
   durationSec: number;
   tickSec: number;
+  /** Blind pick phase before doors open: players set a first recipe, hidden until opening. */
+  pregameSec: number;
 
   // --- Tips & accuracy ---
   tipBase: number;
@@ -36,6 +38,9 @@ export interface Config {
    * falls behind serves too rarely to ever update its score. Infinity = pure last-N.
    */
   shareMaxAgeSec: number;
+  /** Every shop gets at least this share of customers, and at most shareCap. */
+  shareFloor: number;
+  shareCap: number;
   /** Share is divided by (1 + queuePenalty * queueLength). */
   queuePenalty: number;
 
@@ -72,6 +77,8 @@ export interface Config {
   trendShiftIngredients: number;
   /** Trend shift size range, as fraction of scale. */
   trendShiftSize: [number, number];
+  /** 0 = shifts happen instantly; otherwise the ideal walks to its new value over this long. */
+  trendShiftRampSec: number;
 
   // --- Cost of changing recipe ---
   /** Shop closed this many seconds per point changed. */
@@ -86,6 +93,7 @@ export const defaultConfig: Config = {
   scale: 20,
   durationSec: 600,
   tickSec: 0.1,
+  pregameSec: 20,
 
   tipBase: 10,
   tipK: 0.35,
@@ -94,6 +102,8 @@ export const defaultConfig: Config = {
   shareWindow: 10,
   shareP: 1,
   shareMaxAgeSec: 30,
+  shareFloor: 0,
+  shareCap: 1,
   queuePenalty: 0.15,
 
   arrivalMeanSec: 1.5,
@@ -119,6 +129,7 @@ export const defaultConfig: Config = {
   trendShiftTimes: [150, 300, 450],
   trendShiftIngredients: 2,
   trendShiftSize: [0.2, 0.4],
+  trendShiftRampSec: 0,
 
   retoolSecPerPoint: 0,
   retoolCostPerPoint: 0,

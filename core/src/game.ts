@@ -43,6 +43,8 @@ interface Waiter extends Leg {
   stationed: number | null;
   /** When the table it's stationed at last became empty (for auto-return). */
   idleSince: number | null;
+  /** Customer to follow to their table once they get their pizza. */
+  follow: number | null;
 }
 
 interface Table {
@@ -78,6 +80,27 @@ export interface TipLogEntry {
 }
 
 const dist = (a: Vec, b: Vec) => Math.hypot(a.x - b.x, a.y - b.y);
+
+/** Normalize weights into shares, then hold each share within [floor, cap] (water-filling). */
+export function clampShares(weights: number[], floor: number, cap: number): number[] {
+  const n = weights.length;
+  const fixed: (number | null)[] = new Array(n).fill(null);
+  for (let iter = 0; iter < n + 1; iter++) {
+    const freeIdx = weights.map((_, i) => i).filter((i) => fixed[i] === null);
+    const left = 1 - fixed.reduce<number>((a, b) => a + (b ?? 0), 0);
+    const wsum = freeIdx.reduce((a, i) => a + weights[i], 0);
+    const shares = weights.map((w, i) =>
+      fixed[i] !== null ? fixed[i]! : wsum > 0 ? (w / wsum) * left : left / freeIdx.length,
+    );
+    // Fix cap violations first; only then floors (fixing both at once can lose mass).
+    const over = freeIdx.filter((i) => shares[i] > cap + 1e-12);
+    const under = freeIdx.filter((i) => shares[i] < floor - 1e-12);
+    if (over.length) for (const i of over) fixed[i] = cap;
+    else if (under.length) for (const i of under) fixed[i] = floor;
+    else return shares;
+  }
+  return fixed.map((x) => x ?? 0);
+}
 
 export function legPos(l: Leg, t: number): Vec {
   if (t >= l.arriveAt || l.arriveAt <= l.departAt) return l.to;
@@ -131,6 +154,10 @@ export class Game {
   private nextArrival: number;
   private nextDrift: number;
   private shiftIdx = 0;
+  /** Gradual trend shifts: ingredient -> target value and when to take the next step. */
+  private ramps = new Map<number, { target: number; every: number; next: number }>();
+  /** Seconds of blind pick left before doors open. */
+  pregameLeft: number;
 
   constructor(cfg: Config) {
     this.cfg = cfg;
@@ -201,6 +228,7 @@ export class Game {
           target: null,
           stationed: null,
           idleSince: null,
+          follow: null,
         });
       }
     }
@@ -212,6 +240,19 @@ export class Game {
 
     this.nextArrival = this.rng.exp(cfg.arrivalMeanSec);
     this.nextDrift = cfg.driftEverySec;
+    this.pregameLeft = cfg.pregameSec;
+  }
+
+  get phase(): 'pregame' | 'open' {
+    return this.pregameLeft > 0 ? 'pregame' : 'open';
+  }
+
+  private openDoors() {
+    this.pregameLeft = 0;
+    // Reveal everyone's opening recipe.
+    this.recipes.forEach((r, p) =>
+      this.emit('all', { type: 'recipe', t: this.t, restaurant: p, recipe: [...r] as Recipe }),
+    );
   }
 
   get t(): number {
@@ -263,7 +304,14 @@ export class Game {
       );
       let dir = this.rng.next() < 0.5 ? -1 : 1;
       if (this.ideal[i] + dir * size < 1 || this.ideal[i] + dir * size > scale) dir = -dir;
-      this.ideal[i] = clamp(this.ideal[i] + dir * size, 1, scale);
+      const target = clamp(this.ideal[i] + dir * size, 1, scale);
+      const steps = Math.abs(target - this.ideal[i]);
+      if (this.cfg.trendShiftRampSec > 0 && steps > 0) {
+        const every = this.cfg.trendShiftRampSec / steps;
+        this.ramps.set(i, { target, every, next: this.t + every });
+      } else {
+        this.ideal[i] = target;
+      }
     }
     this.headlines.push({ t: this.t, ingredient: picks[0] });
     this.shiftTimes.push(this.t);
@@ -297,8 +345,7 @@ export class Game {
     const w = scores.map(
       (sc, r) => Math.pow(sc, this.cfg.shareP) / (1 + this.cfg.queuePenalty * this.queueLength(r)),
     );
-    const total = w.reduce((a, b) => a + b, 0);
-    return w.map((x) => x / total);
+    return clampShares(w, this.cfg.shareFloor, this.cfg.shareCap);
   }
 
   private setLeg(m: Leg, to: Vec, speed: number) {
@@ -352,12 +399,19 @@ export class Game {
     const door = this.doorPos[c.restaurant];
     const free = this.tables.filter((tb) => tb.customer === null);
     if (free.length === 0) {
+      for (const w of this.waiters) if (w.follow === c.id) w.follow = null;
       this.takeouts++;
       this.finish(c);
       return;
     }
     const tb = free[this.rng.weighted(free.map((f) => 1 / Math.pow(dist(door, f.pos), 2)))];
     tb.customer = c.id;
+    for (const w of this.waiters) {
+      if (w.follow === c.id) {
+        w.follow = null;
+        this.assignWaiter(w, tb.id);
+      }
+    }
     c.table = tb.id;
     c.state = 'walking';
     c.from = door;
@@ -436,6 +490,10 @@ export class Game {
 
   // ---------------------------------------------------------------- waiters
 
+  private isFree(w: Waiter) {
+    return w.target === null && w.follow === null;
+  }
+
   private unstation(w: Waiter) {
     if (w.stationed !== null) {
       this.tables[w.stationed].stationed = null;
@@ -475,8 +533,16 @@ export class Game {
   // ---------------------------------------------------------------- public API
 
   act(player: number, action: Action) {
+    if (action.type === 'ready') {
+      if (this.phase === 'pregame') this.openDoors();
+      return;
+    }
     if (action.type === 'setRecipe') {
       const next = clampRecipe(action.recipe, this.cfg.scale);
+      if (this.phase === 'pregame') {
+        this.recipes[player] = next; // free and secret until doors open
+        return;
+      }
       const points = rawDistance(next, this.recipes[player]);
       if (points === 0) return;
       this.recipes[player] = next;
@@ -485,6 +551,27 @@ export class Game {
       this.money[player] -= points * this.cfg.retoolCostPerPoint;
       this.recipeChanges[player]++;
       this.emit('all', { type: 'recipe', t: this.t, restaurant: player, recipe: [...next] as Recipe });
+    } else if (this.phase === 'pregame') {
+      return;
+    } else if (action.type === 'followCustomer') {
+      const c = this.customers.get(action.customer);
+      if (!c || c.restaurant !== player) return;
+      if (c.state === 'leaving' || (c.state === 'seated' && this.t >= c.finishAt!)) return;
+      const mine = this.waiters.filter((w) => w.owner === player);
+      if (mine.some((w) => w.follow === c.id || (c.table !== undefined && w.target === c.table))) return;
+      const free = mine.filter((w) => this.isFree(w));
+      if (free.length === 0) return;
+      const door = this.doorPos[player];
+      const best = free.reduce((a, b) =>
+        dist(legPos(a, this.t), door) <= dist(legPos(b, this.t), door) ? a : b,
+      );
+      if (c.table !== undefined) {
+        this.assignWaiter(best, c.table);
+      } else {
+        // Wait at the shop; set off as soon as they pick a table.
+        this.sendHome(best);
+        best.follow = c.id;
+      }
     } else if (action.type === 'assignWaiter') {
       const w = this.waiters.find((x) => x.owner === player && x.idx === action.idx);
       if (w) this.assignWaiter(w, action.table);
@@ -493,7 +580,7 @@ export class Game {
       if (!tb) return;
       const mine = this.waiters.filter((w) => w.owner === player);
       if (mine.some((w) => w.target === action.table)) return;
-      const free = mine.filter((w) => w.target === null);
+      const free = mine.filter((w) => this.isFree(w));
       if (free.length === 0) return;
       const best = free.reduce((a, b) =>
         dist(legPos(a, this.t), tb.pos) <= dist(legPos(b, this.t), tb.pos) ? a : b,
@@ -505,7 +592,20 @@ export class Game {
   /** Advance one tick. */
   step() {
     const { cfg } = this;
+    if (this.phase === 'pregame') {
+      this.pregameLeft -= cfg.tickSec;
+      if (this.pregameLeft <= 1e-9) this.openDoors();
+      return;
+    }
     const t = this.t;
+
+    for (const [i, r] of this.ramps) {
+      while (t >= r.next && this.ideal[i] !== r.target) {
+        this.ideal[i] += Math.sign(r.target - this.ideal[i]);
+        r.next += r.every;
+      }
+      if (this.ideal[i] === r.target) this.ramps.delete(i);
+    }
 
     while (t >= this.nextDrift) {
       this.drift();
@@ -620,11 +720,14 @@ export class Game {
       departAt: w.departAt,
       arriveAt: w.arriveAt,
     }));
+    const hidden = this.phase === 'pregame';
     return {
       t,
       me: player,
       cfg: this.cfg,
-      recipes: this.recipes.map((r) => [...r] as Recipe),
+      phase: this.phase,
+      pregameLeft: Math.max(0, this.pregameLeft),
+      recipes: this.recipes.map((r, p) => (hidden && p !== player ? [0, 0, 0, 0] : [...r]) as Recipe),
       money: [...this.money],
       queues: this.recipes.map((_, r) => this.queueLength(r)),
       closedUntil: [...this.closedUntil],
@@ -641,6 +744,7 @@ export class Game {
           target: w.target,
           arriveAt: w.arriveAt,
           stationed: w.stationed,
+          follow: w.follow,
         })),
       restaurantPos: this.restaurantPos,
       doorPos: this.doorPos,

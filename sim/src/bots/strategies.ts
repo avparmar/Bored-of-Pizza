@@ -2,9 +2,11 @@ import { rawDistance, type Action, type Observation, type Recipe } from '@bop/co
 import {
   Belief,
   GainTracker,
+  humanize,
   sameRecipe,
   startingRecipe,
   waiterActions,
+  withOpening,
   type BotFactory,
 } from './common.js';
 
@@ -162,6 +164,8 @@ export const analystBot: BotFactory = () => {
   const lastChange: number[] = [];
   let lastRecipes: Recipe[] | null = null;
   let best: Recipe | null = null;
+  let headlinesSeen = 0;
+  let lastHeadlineAt = -Infinity;
   const WINDOW = 30;
   const LAG = 8; // money arrives ~walk + eat time after the customer is served
 
@@ -177,6 +181,10 @@ export const analystBot: BotFactory = () => {
         }
       }
       belief.update(obs, () => true);
+      if (obs.headlines.length > headlinesSeen) {
+        headlinesSeen = obs.headlines.length;
+        lastHeadlineAt = t;
+      }
 
       // Track public numbers and when each recipe last changed.
       obs.recipes.forEach((r, i) => {
@@ -193,7 +201,8 @@ export const analystBot: BotFactory = () => {
         const now = history[history.length - 1];
         const estimates: { recipe: Recipe; dist: number; w: number }[] = [];
         for (let r = 0; r < obs.recipes.length; r++) {
-          const start = Math.max(t - WINDOW, lastChange[r] + LAG);
+          // Tips from before a trend shift describe the old taste: ignore them.
+          const start = Math.max(t - WINDOW, lastChange[r] + LAG, lastHeadlineAt + LAG);
           if (t - start < 10) continue;
           const dm = now.money[r] - at(start).money[r];
           const ds = at(t - LAG).served[r] - at(start - LAG).served[r];
@@ -250,7 +259,9 @@ export const analystBot: BotFactory = () => {
             bestC = c;
           }
         }
-        best = bestC as Recipe;
+        // Don't lurch: move each ingredient at most 3 points per update.
+        const mine = obs.recipes[obs.me];
+        best = bestC.map((v, i) => Math.max(mine[i] - 3, Math.min(mine[i] + 3, v))) as Recipe;
       }
       const want = best ?? belief.guess();
       if (!sameRecipe(want, obs.recipes[obs.me])) actions.push({ type: 'setRecipe', recipe: want });
@@ -260,7 +271,7 @@ export const analystBot: BotFactory = () => {
   };
 };
 
-export const STRATEGIES: Record<string, BotFactory> = {
+const BASE: Record<string, BotFactory> = {
   analyst: analystBot,
   static: staticBot,
   searcher: searcherBot,
@@ -268,4 +279,22 @@ export const STRATEGIES: Record<string, BotFactory> = {
   hybrid: hybridBot,
   hawk: hawkBot,
 };
+
+export type BotSkill = 'superhuman' | 'human';
+
+/** Every strategy, with a bluffing opening. */
+export const STRATEGIES: Record<string, BotFactory> = Object.fromEntries(
+  Object.entries(BASE).map(([k, f]) => [k, withOpening(f)]),
+);
+
+/** Same strategies, playing at human speed (look every 2s, react in ~1–2s, one waiter order per look). */
+export const HUMAN_STRATEGIES: Record<string, BotFactory> = Object.fromEntries(
+  Object.entries(STRATEGIES).map(([k, f]) => [k, humanize(f)]),
+);
+
+export function strategy(name: string, skill: BotSkill = 'superhuman'): BotFactory {
+  const f = (skill === 'human' ? HUMAN_STRATEGIES : STRATEGIES)[name];
+  if (!f) throw new Error(`Unknown strategy "${name}". Options: ${Object.keys(BASE).join(', ')}`);
+  return f;
+}
 export type { Bot, BotFactory } from './common.js';

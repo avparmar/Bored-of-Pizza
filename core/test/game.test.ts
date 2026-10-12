@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { Game, intervalFromReport, makeConfig, type Recipe } from '../src/index.js';
+import { clampShares, Game, intervalFromReport, makeConfig as baseConfig, type Config, type Recipe } from '../src/index.js';
+
+/** Most tests skip the blind pick phase. */
+const makeConfig = (o: Partial<Config> = {}) => baseConfig({ pregameSec: 0, ...o });
 
 function runIdle(seed: number, overrides = {}) {
   const g = new Game(makeConfig({ seed, ...overrides }));
@@ -102,6 +105,87 @@ describe('Walking and waiters', () => {
       expect(tips.length).toBeGreaterThan(0);
       for (const e of tips) if (e.type === 'tip') expect(e.restaurant).toBe(p);
     }
+  });
+});
+
+describe('Blind pick phase', () => {
+  it('hides rivals recipes until doors open, then reveals them', () => {
+    const g = new Game(baseConfig({ seed: 1, pregameSec: 5 }));
+    g.act(0, { type: 'setRecipe', recipe: [3, 4, 5, 6] });
+    g.act(1, { type: 'setRecipe', recipe: [7, 7, 7, 7] });
+    let o = g.observe(0);
+    expect(o.phase).toBe('pregame');
+    expect(o.recipes[0]).toEqual([3, 4, 5, 6]);
+    expect(o.recipes[1]).toEqual([0, 0, 0, 0]);
+    expect(g.recipeChanges[0]).toBe(0);
+    while (g.observe(0).phase === 'pregame') g.step();
+    o = g.observe(0);
+    expect(o.recipes[1]).toEqual([7, 7, 7, 7]);
+    expect(o.t).toBe(0);
+    expect(g.drainEvents(0).filter((e) => e.type === 'recipe').length).toBe(4);
+  });
+
+  it('ready skips the rest of the phase', () => {
+    const g = new Game(baseConfig({ seed: 1 }));
+    g.act(0, { type: 'ready' });
+    expect(g.phase).toBe('open');
+  });
+});
+
+describe('Following a customer', () => {
+  it('a waiter follows your own customer to their table', () => {
+    const g = new Game(makeConfig({ seed: 3 }));
+    let target: number | null = null;
+    while (g.t < 120 && target === null) {
+      g.step();
+      const o = g.observe(0);
+      const mine = o.customers.find((c) => c.restaurant === 0 && c.state === 'queued');
+      if (mine) {
+        g.act(0, { type: 'followCustomer', customer: mine.id });
+        // Rivals' customers can't be followed.
+        const theirs = o.customers.find((c) => c.restaurant !== 0);
+        if (theirs) g.act(0, { type: 'followCustomer', customer: theirs.id });
+        const waiting = g.observe(0).myWaiters.filter((w) => w.follow !== null);
+        expect(waiting.length).toBe(1);
+        while (g.t < 120) {
+          g.step();
+          const c = g.observe(0).customers.find((x) => x.id === mine.id);
+          if (c?.table != null) {
+            target = c.table;
+            break;
+          }
+        }
+      }
+    }
+    expect(target).not.toBeNull();
+    expect(g.observe(0).myWaiters.some((w) => w.target === target)).toBe(true);
+  });
+});
+
+describe('Shares and shifts', () => {
+  it('clampShares keeps every share within floor and cap', () => {
+    const s = clampShares([100, 1, 1, 1], 0.1, 0.45);
+    expect(s.reduce((a, b) => a + b, 0)).toBeCloseTo(1);
+    for (const x of s) {
+      expect(x).toBeGreaterThanOrEqual(0.1 - 1e-9);
+      expect(x).toBeLessThanOrEqual(0.45 + 1e-9);
+    }
+    expect(clampShares([1, 1, 1, 1], 0, 1)).toEqual([0.25, 0.25, 0.25, 0.25]);
+  });
+
+  it('gradual trend shifts walk the ideal one step at a time', () => {
+    const g = new Game(makeConfig({ seed: 8, driftEverySec: 1e9, trendShiftTimes: [10], trendShiftRampSec: 20 }));
+    while (g.t < 10) g.step();
+    const before = [...g.ideal];
+    let maxStep = 0;
+    let prev = [...g.ideal];
+    while (g.t < 40) {
+      g.step();
+      for (let i = 0; i < 4; i++) maxStep = Math.max(maxStep, Math.abs(g.ideal[i] - prev[i]));
+      prev = [...g.ideal];
+    }
+    expect(maxStep).toBeLessThanOrEqual(1);
+    expect(g.ideal).not.toEqual(before);
   });
 });
 

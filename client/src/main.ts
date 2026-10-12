@@ -1,5 +1,5 @@
 import { INGREDIENTS, type GameEvent, type MagnitudeMode, type Observation, type Recipe, type Report } from '@bop/core';
-import { STRATEGIES } from '@bop/sim';
+import { STRATEGIES, type BotSkill } from '@bop/sim';
 import { CourtRenderer, SHOP_COLORS, SHOP_NAMES, SHORT } from './render.js';
 import { Session, type Seat } from './session.js';
 import { showEnd } from './endscreen.js';
@@ -23,6 +23,12 @@ const settings = {
   arrivalMeanSec: 1.5,
   seed: Math.floor(Math.random() * 1e6),
   reveal: false,
+  skill: 'human' as BotSkill,
+  tipK: 0.35,
+  shareFloor: 0,
+  shareCap: 1,
+  shiftIngredients: 2,
+  shiftRamp: 0,
 };
 
 // ------------------------------------------------------------------ state
@@ -41,8 +47,19 @@ function start(seats: Seat[]) {
   settings.seats = seats;
   session = new Session({
     seats,
-    overrides: { seed: settings.seed, magnitude: settings.magnitude, arrivalMeanSec: settings.arrivalMeanSec },
+    skill: settings.skill,
+    overrides: {
+      seed: settings.seed,
+      magnitude: settings.magnitude,
+      arrivalMeanSec: settings.arrivalMeanSec,
+      tipK: settings.tipK,
+      shareFloor: settings.shareFloor,
+      shareCap: settings.shareCap,
+      trendShiftIngredients: settings.shiftIngredients,
+      trendShiftRampSec: settings.shiftRamp,
+    },
   });
+  if (session.human === null) session.ready(); // spectators skip the blind pick
   session.speed = Number($<HTMLSelectElement>('speed').value);
   const obs = session.game.observe(session.human ?? 0);
   draft = [...obs.recipes[session.human ?? 0]] as Recipe;
@@ -50,7 +67,7 @@ function start(seats: Seat[]) {
   $('intel-latest').innerHTML = '';
   $('intel-history').innerHTML = '';
   latestIds = [];
-  $('headline').textContent = 'Doors open! Customers are arriving.';
+  $('headline').textContent = human0(seats) ? 'Blind pick: choose your opening recipe.' : 'Doors open!';
   const human = session.human !== null;
   $('recipe-panel').classList.toggle('hidden', !human);
   $('intel-panel').classList.toggle('hidden', !human);
@@ -60,6 +77,10 @@ function start(seats: Seat[]) {
     : '';
   $('overlay').innerHTML = '';
   renderer.resize(obs.cfg.courtSize);
+}
+
+function human0(seats: Seat[]) {
+  return seats.includes('human');
 }
 
 function newSeed() {
@@ -76,8 +97,10 @@ function showStart() {
       pizza is to today's taste. Nobody knows exactly what that taste is, and it keeps changing.</p>
       <ul>
         <li><b>Tune your recipe</b> on the right, then press <b>Apply</b>. Every shop's recipe is public.</li>
-        <li><b>Click a table</b> to send a waiter. When that diner finishes, the waiter reports back
-        whether one ingredient should go <b>up</b> or <b>down</b>. This works on rivals' customers too.</li>
+        <li>First, a 20-second <b>blind pick</b>: choose your opening recipe while everyone else's is hidden.</li>
+        <li><b>Click one of your customers</b> (in line or carrying your pizza) and a waiter follows them to
+        their table. Or <b>click any table</b> to send a waiter there, including to spy on rivals' diners.
+        When the diner finishes, the waiter reports whether one ingredient should go <b>up</b> or <b>down</b>.</li>
         <li>Better pizza brings more customers. Watch the headlines for big trend shifts.</li>
         <li>Most money after 10 minutes wins.</li>
       </ul>
@@ -212,6 +235,17 @@ function addHistory(r: Report, me: number, t: number) {
 
 // ------------------------------------------------------------------ leaderboard, clock
 
+function refreshPregame(obs: Observation) {
+  const pre = obs.phase === 'pregame' && session!.human !== null;
+  $('pregame').classList.toggle('hidden', !pre);
+  if (pre) {
+    $('pregame-left').textContent = String(Math.ceil(obs.pregameLeft));
+    $('clock').textContent = `🔒 ${Math.ceil(obs.pregameLeft)}`;
+  } else if ($('headline').textContent?.startsWith('Blind pick')) {
+    $('headline').textContent = 'Doors open! Customers are arriving.';
+  }
+}
+
 function fmtClock(t: number, remaining = true) {
   const total = session?.game.cfg.durationSec ?? 600;
   const s = Math.max(0, Math.ceil(remaining ? total - t : t));
@@ -271,6 +305,7 @@ function frame(now: number) {
     if (now - lastUi > 200) {
       lastUi = now;
       refreshBoard(obs);
+      refreshPregame(obs);
       if (session.human !== null) {
         refreshIntel(obs);
         refreshRecipe();
@@ -294,20 +329,32 @@ function frame(now: number) {
 canvas.addEventListener('mousemove', (e) => {
   if (!session || session.human === null) return;
   const obs = session.game.observe(session.human);
-  renderer.hoverTable = renderer.tableAt(obs, e.offsetX, e.offsetY);
-  canvas.style.cursor = renderer.hoverTable !== null ? 'pointer' : 'default';
+  // Your own customers take priority over tables under the cursor.
+  renderer.hoverCustomer = renderer.customerAt(e.offsetX, e.offsetY, session.human);
+  renderer.hoverTable = renderer.hoverCustomer === null ? renderer.tableAt(obs, e.offsetX, e.offsetY) : null;
+  canvas.style.cursor = renderer.hoverTable !== null || renderer.hoverCustomer !== null ? 'pointer' : 'default';
 });
-canvas.addEventListener('mouseleave', () => (renderer.hoverTable = null));
+canvas.addEventListener('mouseleave', () => {
+  renderer.hoverTable = null;
+  renderer.hoverCustomer = null;
+});
 canvas.addEventListener('click', (e) => {
   if (!session || session.human === null) return;
+  const cust = renderer.customerAt(e.offsetX, e.offsetY, session.human);
+  if (cust !== null) {
+    session.act({ type: 'followCustomer', customer: cust });
+    return;
+  }
   const obs = session.game.observe(session.human);
   const tb = renderer.tableAt(obs, e.offsetX, e.offsetY);
   if (tb !== null) session.act({ type: 'sendWaiter', table: tb });
 });
+$('btn-ready').onclick = () => session?.ready();
 
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement && e.target.type !== 'range') return;
   if (e.key === 'Enter') applyDraft();
+  else if ((e.key === 'r' || e.key === 'R') && session?.game.phase === 'pregame') session.ready();
   else if (e.key === 'Escape') resetDraft();
   else if (e.key === 'p' || e.key === 'P') togglePause();
   else if (e.key === '`') toggleDebug();
@@ -339,6 +386,12 @@ function toggleDebug() {
     .join('');
   $<HTMLSelectElement>('dbg-magnitude').value = settings.magnitude;
   $<HTMLInputElement>('dbg-arrival').value = String(settings.arrivalMeanSec);
+  $<HTMLSelectElement>('dbg-skill').value = settings.skill;
+  $<HTMLInputElement>('dbg-tipk').value = String(settings.tipK);
+  $<HTMLInputElement>('dbg-floor').value = String(settings.shareFloor);
+  $<HTMLInputElement>('dbg-cap').value = String(settings.shareCap);
+  $<HTMLInputElement>('dbg-shift-n').value = String(settings.shiftIngredients);
+  $<HTMLInputElement>('dbg-ramp').value = String(settings.shiftRamp);
   $<HTMLInputElement>('dbg-seed').value = String(settings.seed);
 }
 $('btn-debug').onclick = toggleDebug;
@@ -354,6 +407,16 @@ $('dbg-restart').onclick = () => {
   settings.magnitude = $<HTMLSelectElement>('dbg-magnitude').value as MagnitudeMode;
   settings.arrivalMeanSec = Number($<HTMLInputElement>('dbg-arrival').value) || 1.5;
   settings.seed = Number($<HTMLInputElement>('dbg-seed').value) || 1;
+  settings.skill = $<HTMLSelectElement>('dbg-skill').value as BotSkill;
+  const num = (id: string, d: number) => {
+    const v = Number($<HTMLInputElement>(id).value);
+    return Number.isFinite(v) ? v : d;
+  };
+  settings.tipK = num('dbg-tipk', 0.35);
+  settings.shareFloor = num('dbg-floor', 0);
+  settings.shareCap = num('dbg-cap', 1);
+  settings.shiftIngredients = Math.max(1, Math.min(4, Math.round(num('dbg-shift-n', 2))));
+  settings.shiftRamp = Math.max(0, num('dbg-ramp', 0));
   $('debug').classList.add('hidden');
   start(seats);
 };
@@ -366,4 +429,5 @@ requestAnimationFrame(frame);
   get session() {
     return session;
   },
+  renderer,
 };

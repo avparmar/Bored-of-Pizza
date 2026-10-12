@@ -24,7 +24,13 @@
         </div>
       </header>
 
-      <main id="court-wrap"><canvas id="court"></canvas></main>
+      <main id="court-wrap">
+        <div id="pregame" class="hidden">
+          <span>🔒 <b>Blind pick</b>: set your opening recipe. Rivals' recipes stay hidden until doors open in <b id="pregame-left">20</b>s.</span>
+          <button id="btn-ready" class="primary">Ready</button>
+        </div>
+        <canvas id="court"></canvas>
+      </main>
 
       <aside id="sidebar">
         <section class="panel" id="leaderboard-panel">
@@ -64,6 +70,21 @@
           <option value="all">B: magnitude everywhere</option>
           <option value="own">C: magnitude on own pizza</option>
         </select>
+      </label>
+      <label>Bot skill
+        <select id="dbg-skill">
+          <option value="human">Human-like (look every 2s, react late)</option>
+          <option value="superhuman">Superhuman</option>
+        </select>
+      </label>
+      <label>Tip steepness k (lower = gentler) <input id="dbg-tipk" type="number" step="0.01" min="0.05" value="0.35" /></label>
+      <label>Customer share floor / cap
+        <div class="row"><input id="dbg-floor" type="number" step="0.05" min="0" max="0.25" value="0" />
+        <input id="dbg-cap" type="number" step="0.05" min="0.25" max="1" value="1" /></div>
+      </label>
+      <label>Trend shift: ingredients / ramp seconds
+        <div class="row"><input id="dbg-shift-n" type="number" step="1" min="1" max="4" value="2" />
+        <input id="dbg-ramp" type="number" step="5" min="0" value="0" /></div>
       </label>
       <label>Seconds between arrivals <input id="dbg-arrival" type="number" step="0.1" min="0.3" value="1.5" /></label>
       <label>Seed <input id="dbg-seed" type="number" value="1" /></label>

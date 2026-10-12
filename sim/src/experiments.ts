@@ -9,18 +9,19 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultConfig, type Config } from '@bop/core';
 import { formatBatch, reachAfterSitDown, runBatch } from './runner.js';
+import type { BotSkill } from './bots/strategies.js';
 
 interface Experiment {
   title: string;
   question: string;
-  batches: { label: string; lineup: string[]; overrides?: Partial<Config> }[];
+  batches: { label: string; lineup: string[]; overrides?: Partial<Config>; skill?: BotSkill }[];
   note?: () => string;
 }
 
 // ------------------------------------------------------------------ round 1
 
 /** Round 1 ran before these were changed; pin them so the suite stays reproducible. */
-const R1: Partial<Config> = { shareP: 2, eatSec: 7, customerWalkIn: false, waiterAutoReturn: false };
+const R1: Partial<Config> = { shareP: 2, eatSec: 7, customerWalkIn: false, waiterAutoReturn: false, pregameSec: 0 };
 const MIXED = ['searcher', 'hybrid', 'copycat', 'static'];
 
 const round1: Experiment[] = [
@@ -118,7 +119,7 @@ const SMART = ['analyst', 'hybrid', 'hawk', 'searcher'];
  * Customers now also leave from the shop door rather than its centre, so reruns differ slightly
  * from the committed round2.md (reports arrive ~2s sooner).
  */
-const R2: Partial<Config> = { customerWalkIn: false, waiterAutoReturn: false };
+const R2: Partial<Config> = { customerWalkIn: false, waiterAutoReturn: false, pregameSec: 0 };
 
 const round2: Experiment[] = [
   {
@@ -185,14 +186,79 @@ const round2: Experiment[] = [
   },
 ];
 
+// ------------------------------------------------------------------ round 3
+
+const R3_LINEUP = ['analyst', 'hybrid', 'hawk', 'hybrid'];
+const H: BotSkill = 'human';
+
+const round3: Experiment[] = [
+  {
+    title: '1. Human-like bots vs superhuman bots',
+    question:
+      'Human-like bots look every 2s, react 0.8–2s late and send at most one waiter per look. How much does that change intel and outcomes?',
+    batches: [
+      { label: 'superhuman', lineup: R3_LINEUP, skill: 'superhuman' },
+      { label: 'human-like', lineup: R3_LINEUP, skill: H },
+    ],
+  },
+  {
+    title: '2. Gentler trend shifts',
+    question:
+      'Default: 2 ingredients jump 4–8 points instantly. "Income gap after shifts" = (best − worst) / average income in the 60s after a shift; compare with a typical minute.',
+    batches: [
+      { label: 'instant (current)', lineup: R3_LINEUP, skill: H },
+      { label: 'gradual over 20s', lineup: R3_LINEUP, skill: H, overrides: { trendShiftRampSec: 20 } },
+      { label: 'gradual over 40s', lineup: R3_LINEUP, skill: H, overrides: { trendShiftRampSec: 40 } },
+      { label: '1 ingredient, instant', lineup: R3_LINEUP, skill: H, overrides: { trendShiftIngredients: 1 } },
+      { label: 'smaller (2–5 points), instant', lineup: R3_LINEUP, skill: H, overrides: { trendShiftSize: [0.1, 0.25] } },
+    ],
+  },
+  {
+    title: '3. Lighter penalty for being wrong',
+    question:
+      'tipK sets how fast tips (and accuracy) fall with distance. Share floor/cap keep every shop between 10% and 45% of customers.',
+    batches: [
+      { label: 'k=0.35 (current)', lineup: R3_LINEUP, skill: H },
+      { label: 'k=0.25', lineup: R3_LINEUP, skill: H, overrides: { tipK: 0.25 } },
+      { label: 'k=0.18', lineup: R3_LINEUP, skill: H, overrides: { tipK: 0.18 } },
+      { label: 'share 10–45%', lineup: R3_LINEUP, skill: H, overrides: { shareFloor: 0.1, shareCap: 0.45 } },
+      {
+        label: 'k=0.25 + share 10–45%',
+        lineup: R3_LINEUP,
+        skill: H,
+        overrides: { tipK: 0.25, shareFloor: 0.1, shareCap: 0.45 },
+      },
+    ],
+  },
+  {
+    title: '4. Combined',
+    question: 'Gradual 20s shifts together with a lighter penalty.',
+    batches: [
+      {
+        label: 'gradual 20s + share 10–45%',
+        lineup: R3_LINEUP,
+        skill: H,
+        overrides: { trendShiftRampSec: 20, shareFloor: 0.1, shareCap: 0.45 },
+      },
+      {
+        label: 'gradual 20s + k=0.25 + share 10–45%',
+        lineup: R3_LINEUP,
+        skill: H,
+        overrides: { trendShiftRampSec: 20, tipK: 0.25, shareFloor: 0.1, shareCap: 0.45 },
+      },
+    ],
+  },
+];
+
 // ------------------------------------------------------------------ main
 
 const SUITES: Record<string, { title: string; experiments: Experiment[] }> = {
   round1: { title: 'Round 1: simple bots', experiments: round1 },
   round2: { title: 'Round 2: signed-off defaults and a smarter bot', experiments: round2 },
+  round3: { title: 'Round 3: human-like bots, trend shifts vs penalty', experiments: round3 },
 };
 
-const suiteName = process.argv[2] ?? 'round2';
+const suiteName = process.argv[2] ?? 'round3';
 const GAMES = Number(process.argv[3] ?? 200);
 const suite = SUITES[suiteName];
 if (!suite) {
@@ -224,7 +290,8 @@ for (const e of suite.experiments) {
   out.push('');
   if (e.note) out.push(e.note());
   for (const b of e.batches) {
-    out.push(formatBatch(runBatch(b.label, b.lineup, GAMES, b.overrides ?? {})));
+    const label = b.skill ? `${b.label} · ${b.skill} bots` : b.label;
+    out.push(formatBatch(runBatch(label, b.lineup, GAMES, b.overrides ?? {}, 1000, b.skill)));
     process.stderr.write(`done: ${e.title} / ${b.label}\n`);
   }
 }

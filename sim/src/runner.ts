@@ -1,5 +1,5 @@
-import { distance, Game, makeConfig, Rng, type Config } from '@bop/core';
-import { STRATEGIES } from './bots/strategies.js';
+import { distance, Game, makeConfig, Rng, type Config, type Snapshot } from '@bop/core';
+import { strategy, type BotSkill } from './bots/strategies.js';
 
 export interface PlayerResult {
   strategy: string;
@@ -34,18 +34,20 @@ export interface GameResult {
   takeouts: number;
   /** Fraction of seated diners who had a waiter at their table when they finished. */
   watchedRate: number;
+  /** (max − min) / mean income across shops in the 60s after each trend shift. */
+  postShiftGap: number;
+  /** Same measure averaged over every whole minute of the game, for comparison. */
+  typicalGap: number;
 }
 
 const CLOSE = 2;
 const DECIDE_EVERY = 1;
 
-export function runGame(cfg: Config, lineup: string[]): GameResult {
+export function runGame(cfg: Config, lineup: string[], skill: BotSkill = 'superhuman'): GameResult {
   const game = new Game(cfg);
   const botRng = new Rng(cfg.seed * 7919 + 1);
   const bots = lineup.map((name, i) => {
-    const f = STRATEGIES[name];
-    if (!f) throw new Error(`Unknown strategy "${name}". Options: ${Object.keys(STRATEGIES).join(', ')}`);
-    return f(i, botRng);
+    return strategy(name, skill)(i, botRng);
   });
 
   let nextDecision = 0;
@@ -130,6 +132,10 @@ export function runGame(cfg: Config, lineup: string[]): GameResult {
     staleDirectionRate: avg(log.map((r) => (r.staleDirection ? 1 : 0))),
     reportDelay: avg(log.map((r) => r.deliveredAt - r.orderedAt)),
     takeouts: game.takeouts,
+    postShiftGap: avg(game.shiftTimes.map((t0) => incomeGap(snaps, t0, t0 + 60))),
+    typicalGap: avg(
+      Array.from({ length: Math.floor(cfg.durationSec / 60) }, (_, m) => incomeGap(snaps, m * 60, m * 60 + 60)),
+    ),
     watchedRate: game.tableFinishes ? game.watchedFinishes / game.tableFinishes : 0,
   };
 }
@@ -165,6 +171,8 @@ export interface BatchSummary {
   reportDelay: number;
   takeoutsPerGame: number;
   watchedRate: number;
+  postShiftGap: number;
+  typicalGap: number;
 }
 
 /** Runs `games` games, rotating seats each game so no strategy is stuck with one corner. */
@@ -174,12 +182,13 @@ export function runBatch(
   games: number,
   overrides: Partial<Config> = {},
   baseSeed = 1000,
+  skill: BotSkill = 'superhuman',
 ): BatchSummary {
   const results: GameResult[] = [];
   for (let g = 0; g < games; g++) {
     const rot = g % lineup.length;
     const seats = [...lineup.slice(rot), ...lineup.slice(0, rot)];
-    results.push(runGame(makeConfig({ ...overrides, seed: baseSeed + g }), seats));
+    results.push(runGame(makeConfig({ ...overrides, seed: baseSeed + g }), seats, skill));
   }
 
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
@@ -227,6 +236,8 @@ export function runBatch(
     reportDelay: avg(results.map((r) => r.reportDelay)),
     takeoutsPerGame: avg(results.map((r) => r.takeouts)),
     watchedRate: avg(results.map((r) => r.watchedRate)),
+    postShiftGap: avg(results.map((r) => r.postShiftGap)),
+    typicalGap: avg(results.map((r) => r.typicalGap)),
   };
 }
 
@@ -261,6 +272,7 @@ export function formatBatch(b: BatchSummary): string {
       `(avg ${b.recoveryTime === null ? '—' : num(b.recoveryTime, 0) + 's'}) · ` +
       `report delay ${num(b.reportDelay)}s · ideal moved ${num(b.staleness, 2)} pts by delivery · ` +
       `direction already wrong ${pct(b.staleDirectionRate)} · diners watched by a waiter ${pct(b.watchedRate)} · ` +
+      `income gap after shifts ${num(b.postShiftGap, 2)} (typical minute ${num(b.typicalGap, 2)}) · ` +
       `takeouts/game ${num(b.takeoutsPerGame)}`,
   );
   lines.push('');
@@ -279,4 +291,13 @@ export function reachAfterSitDown(overrides: Partial<Config> = {}) {
     g.tables.filter((tb) => Math.hypot(tb.pos.x - from.x, tb.pos.y - from.y) / cfg.waiterSpeed <= cfg.eatSec)
       .length / g.tables.length;
   return { fromCorner: reach(g.restaurantPos[0]), fromCenter: reach(center) };
+}
+
+function incomeGap(snaps: Snapshot[], t0: number, t1: number): number {
+  const a = snaps.find((x) => x.t >= t0);
+  const b = [...snaps].reverse().find((x) => x.t <= t1);
+  if (!a || !b || b.t <= a.t) return 0;
+  const inc = b.money.map((m, i) => m - a.money[i]);
+  const mean = inc.reduce((x, y) => x + y, 0) / inc.length;
+  return mean > 0 ? (Math.max(...inc) - Math.min(...inc)) / mean : 0;
 }
