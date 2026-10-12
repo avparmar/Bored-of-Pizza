@@ -53,6 +53,45 @@ export interface WaiterView {
   stationed: number | null;
 }
 
+/** A moving thing: position at time t is from→to, linearly between departAt and arriveAt. */
+export interface Leg {
+  from: Vec;
+  to: Vec;
+  departAt: number;
+  arriveAt: number;
+}
+
+export type CustomerState = 'entering' | 'queued' | 'cooking' | 'walking' | 'seated' | 'leaving';
+
+export interface CustomerView extends Leg {
+  id: number;
+  restaurant: number;
+  state: CustomerState;
+  /** Position in line (0 = next up); -1 when at the counter or not in line. */
+  queueIdx: number;
+  table: number | null;
+  /** True once they're carrying (or have eaten) a pizza. */
+  hasPizza: boolean;
+}
+
+export interface PublicWaiterView extends Leg {
+  owner: number;
+  idx: number;
+  state: 'home' | 'out' | 'returning';
+  target: number | null;
+  stationed: number | null;
+}
+
+export type GameEvent =
+  /** Private to the shop owner. */
+  | { type: 'tip'; t: number; restaurant: number; amount: number }
+  /** Private to the recipient. */
+  | { type: 'report'; t: number; report: Report }
+  | { type: 'headline'; t: number; ingredient: number }
+  | { type: 'recipe'; t: number; restaurant: number; recipe: Recipe }
+  /** Your waiter arrived at a table someone else was already holding. */
+  | { type: 'blocked'; t: number; table: number };
+
 /** Everything one player is allowed to know. Never contains the ideal recipe. */
 export interface Observation {
   t: number;
@@ -70,8 +109,15 @@ export interface Observation {
   tables: TableView[];
   myWaiters: WaiterView[];
   restaurantPos: Vec[];
+  /** Where customers queue and waiters start from. */
+  doorPos: Vec[];
+  entrances: Vec[];
+  customers: CustomerView[];
+  waiters: PublicWaiterView[];
 }
 
 export type Action =
   | { type: 'setRecipe'; recipe: Recipe }
-  | { type: 'assignWaiter'; idx: number; table: number | null };
+  | { type: 'assignWaiter'; idx: number; table: number | null }
+  /** Send the first free waiter (home or walking back), nearest first. */
+  | { type: 'sendWaiter'; table: number };

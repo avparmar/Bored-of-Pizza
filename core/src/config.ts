@@ -51,6 +51,11 @@ export interface Config {
 
   // --- Intel ---
   waitersPerPlayer: number;
+  /** Waiters walk home after their diner finishes, or after a table sits empty this long. */
+  waiterAutoReturn: boolean;
+  waiterIdleReturnSec: number;
+  /** Customers walk in from an entrance to the shop, and walk out after eating. */
+  customerWalkIn: boolean;
   /** Chance each of your own customers leaves you a comment card when done eating. */
   commentCardRate: number;
   magnitude: MagnitudeMode;
@@ -100,6 +105,9 @@ export const defaultConfig: Config = {
   tableGrid: 4,
 
   waitersPerPlayer: 2,
+  waiterAutoReturn: true,
+  waiterIdleReturnSec: 3,
+  customerWalkIn: true,
   commentCardRate: 1 / 8,
   magnitude: 'none',
   magnitudeBuckets: [0.1, 0.3],

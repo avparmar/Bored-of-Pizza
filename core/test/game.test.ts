@@ -46,7 +46,7 @@ describe('Game', () => {
   });
 
   it('only shows magnitude on own pizza in "own" mode', () => {
-    const g = new Game(makeConfig({ seed: 5, magnitude: 'own' }));
+    const g = new Game(makeConfig({ seed: 5, magnitude: 'own', waiterAutoReturn: false }));
     // Park player 0's waiters across the court so they catch rival customers.
     g.act(0, { type: 'assignWaiter', idx: 0, table: 15 });
     g.act(0, { type: 'assignWaiter', idx: 1, table: 12 });
@@ -64,6 +64,44 @@ describe('Game', () => {
     g.act(0, { type: 'setRecipe', recipe: [1, 1, 1, 1] });
     // Starts at 11 on every slider (middle of 1–20): 4 sliders x 10 points x 2s.
     expect(g.closedUntil[0]).toBe(80);
+  });
+});
+
+describe('Walking and waiters', () => {
+  it('customers walk in from an entrance before joining the queue', () => {
+    const g = new Game(makeConfig({ seed: 2 }));
+    while (g.t < 3) g.step();
+    const obs = g.observe(0);
+    expect(obs.customers.some((c) => c.state === 'entering')).toBe(true);
+    for (const c of obs.customers.filter((c) => c.state === 'entering')) {
+      expect(obs.entrances).toContainEqual(c.from);
+    }
+  });
+
+  it('sendWaiter dispatches a free waiter, and it walks home after the table empties', () => {
+    const g = new Game(makeConfig({ seed: 4 }));
+    g.act(0, { type: 'sendWaiter', table: 5 });
+    let obs = g.observe(0);
+    const out = obs.waiters.filter((w) => w.owner === 0 && w.state === 'out');
+    expect(out.length).toBe(1);
+    expect(out[0].target).toBe(5);
+    // Sending to the same table again does nothing.
+    g.act(0, { type: 'sendWaiter', table: 5 });
+    expect(g.observe(0).waiters.filter((w) => w.owner === 0 && w.state === 'out').length).toBe(1);
+    // Eventually it comes back home.
+    while (g.t < 60) g.step();
+    obs = g.observe(0);
+    expect(obs.waiters.filter((w) => w.owner === 0).every((w) => w.state !== 'out')).toBe(true);
+  });
+
+  it('emits private tip events only to the shop owner', () => {
+    const g = new Game(makeConfig({ seed: 6 }));
+    while (g.t < 60) g.step();
+    for (let p = 0; p < 4; p++) {
+      const tips = g.drainEvents(p).filter((e) => e.type === 'tip');
+      expect(tips.length).toBeGreaterThan(0);
+      for (const e of tips) if (e.type === 'tip') expect(e.restaurant).toBe(p);
+    }
   });
 });
 

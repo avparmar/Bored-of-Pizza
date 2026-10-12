@@ -11,36 +11,38 @@ import {
 } from './recipe.js';
 import type {
   Action,
+  CustomerState,
+  CustomerView,
+  GameEvent,
   Headline,
+  Leg,
   Observation,
+  PublicWaiterView,
   Recipe,
   Report,
   TableView,
   Vec,
 } from './types.js';
 
-interface Customer {
+interface Customer extends Leg {
   id: number;
   restaurant: number;
-  state: 'queued' | 'cooking' | 'walking' | 'seated';
+  state: CustomerState;
   recipe?: Recipe;
   idealAtOrder?: Recipe;
   orderedAt?: number;
   readyAt?: number;
   table?: number;
-  arriveAt?: number;
   finishAt?: number;
 }
 
-interface Waiter {
+interface Waiter extends Leg {
   owner: number;
   idx: number;
-  from: Vec;
-  to: Vec;
-  departAt: number;
-  arriveAt: number;
   target: number | null;
   stationed: number | null;
+  /** When the table it's stationed at last became empty (for auto-return). */
+  idleSince: number | null;
 }
 
 interface Table {
@@ -77,6 +79,13 @@ export interface TipLogEntry {
 
 const dist = (a: Vec, b: Vec) => Math.hypot(a.x - b.x, a.y - b.y);
 
+export function legPos(l: Leg, t: number): Vec {
+  if (t >= l.arriveAt || l.arriveAt <= l.departAt) return l.to;
+  if (t <= l.departAt) return l.from;
+  const f = (t - l.departAt) / (l.arriveAt - l.departAt);
+  return { x: l.from.x + (l.to.x - l.from.x) * f, y: l.from.y + (l.to.y - l.from.y) * f };
+}
+
 /**
  * The authoritative game. Holds secrets (the ideal recipe); players only ever see `observe()`.
  * Pure and deterministic given cfg.seed: no I/O, no wall clock.
@@ -96,11 +105,14 @@ export class Game {
   readonly queues: number[][];
   readonly cooking: (number | null)[];
   readonly restaurantPos: Vec[];
+  readonly doorPos: Vec[];
+  readonly entrances: Vec[];
   readonly tables: Table[];
   readonly waiters: Waiter[];
   readonly reports: Report[][];
   readonly startingIntel: ({ ingredient: number; value: number } | null)[];
   readonly headlines: Headline[] = [];
+  private readonly events: GameEvent[][];
 
   // Logs for analysis
   readonly snapshots: Snapshot[] = [];
@@ -137,6 +149,7 @@ export class Game {
     this.queues = Array.from({ length: n }, () => []);
     this.cooking = new Array(n).fill(null);
     this.reports = Array.from({ length: n }, () => []);
+    this.events = Array.from({ length: n }, () => []);
 
     const corners: Vec[] = [
       { x: 1, y: 1 },
@@ -145,6 +158,18 @@ export class Game {
       { x: S - 1, y: S - 1 },
     ];
     this.restaurantPos = Array.from({ length: n }, (_, i) => corners[i % 4]);
+    // The door faces the middle of the court.
+    this.doorPos = this.restaurantPos.map((p) => ({
+      x: p.x + (p.x < S / 2 ? 2.5 : -2.5),
+      y: p.y + (p.y < S / 2 ? 2.5 : -2.5),
+    }));
+    // Mall corridors open onto the middle of each side.
+    this.entrances = [
+      { x: S / 2, y: -1 },
+      { x: S + 1, y: S / 2 },
+      { x: S / 2, y: S + 1 },
+      { x: -1, y: S / 2 },
+    ];
 
     this.tables = [];
     const g = cfg.tableGrid;
@@ -165,7 +190,7 @@ export class Game {
     this.waiters = [];
     for (let p = 0; p < n; p++) {
       for (let w = 0; w < cfg.waitersPerPlayer; w++) {
-        const home = this.restaurantPos[p];
+        const home = this.doorPos[p];
         this.waiters.push({
           owner: p,
           idx: w,
@@ -175,6 +200,7 @@ export class Game {
           arriveAt: 0,
           target: null,
           stationed: null,
+          idleSince: null,
         });
       }
     }
@@ -194,6 +220,18 @@ export class Game {
 
   get done(): boolean {
     return this.t >= this.cfg.durationSec;
+  }
+
+  private emit(to: number | 'all', e: GameEvent) {
+    if (to === 'all') for (const q of this.events) q.push(e);
+    else this.events[to].push(e);
+  }
+
+  /** Events for one player since the last call. */
+  drainEvents(player: number): GameEvent[] {
+    const out = this.events[player];
+    this.events[player] = [];
+    return out;
   }
 
   // ---------------------------------------------------------------- ideal recipe
@@ -229,6 +267,7 @@ export class Game {
     }
     this.headlines.push({ t: this.t, ingredient: picks[0] });
     this.shiftTimes.push(this.t);
+    this.emit('all', { type: 'headline', t: this.t, ingredient: picks[0] });
   }
 
   // ---------------------------------------------------------------- customers
@@ -262,11 +301,38 @@ export class Game {
     return w.map((x) => x / total);
   }
 
+  private setLeg(m: Leg, to: Vec, speed: number) {
+    const here = legPos(m, this.t);
+    m.from = here;
+    m.to = to;
+    m.departAt = this.t;
+    m.arriveAt = this.t + dist(here, to) / speed;
+  }
+
   private spawnCustomer() {
     const r = this.rng.weighted(this.shares());
-    const c: Customer = { id: this.nextCustomerId++, restaurant: r, state: 'queued' };
+    const door = this.doorPos[r];
+    const c: Customer = {
+      id: this.nextCustomerId++,
+      restaurant: r,
+      state: 'queued',
+      from: door,
+      to: door,
+      departAt: this.t,
+      arriveAt: this.t,
+    };
     this.customers.set(c.id, c);
-    this.queues[r].push(c.id);
+    if (this.cfg.customerWalkIn) {
+      // Come in from the entrance nearest the chosen shop (ties broken randomly).
+      const ds = this.entrances.map((e) => dist(e, door));
+      const best = Math.min(...ds);
+      const options = this.entrances.filter((_, i) => ds[i] - best < 1e-6);
+      c.from = this.rng.pick(options);
+      c.arriveAt = this.t + dist(c.from, door) / this.cfg.customerSpeed;
+      c.state = 'entering';
+    } else {
+      this.queues[r].push(c.id);
+    }
   }
 
   private startOrder(r: number) {
@@ -283,18 +349,21 @@ export class Game {
   private depart(c: Customer) {
     this.cooking[c.restaurant] = null;
     this.served[c.restaurant]++;
-    const home = this.restaurantPos[c.restaurant];
+    const door = this.doorPos[c.restaurant];
     const free = this.tables.filter((tb) => tb.customer === null);
     if (free.length === 0) {
       this.takeouts++;
       this.finish(c);
       return;
     }
-    const tb = free[this.rng.weighted(free.map((f) => 1 / Math.pow(dist(home, f.pos), 2)))];
+    const tb = free[this.rng.weighted(free.map((f) => 1 / Math.pow(dist(door, f.pos), 2)))];
     tb.customer = c.id;
     c.table = tb.id;
     c.state = 'walking';
-    c.arriveAt = this.t + dist(home, tb.pos) / this.cfg.customerSpeed;
+    c.from = door;
+    c.to = tb.pos;
+    c.departAt = this.t;
+    c.arriveAt = this.t + dist(door, tb.pos) / this.cfg.customerSpeed;
     c.finishAt = c.arriveAt + this.cfg.eatSec;
   }
 
@@ -305,6 +374,7 @@ export class Game {
     const tip = cfg.tipBase * Math.exp(-cfg.tipK * d) * noise;
     this.money[c.restaurant] += tip;
     this.tipLog.push({ t: this.t, restaurant: c.restaurant, tip, distance: d });
+    this.emit(c.restaurant, { type: 'tip', t: this.t, restaurant: c.restaurant, amount: tip });
 
     const h = this.accHistory[c.restaurant];
     h.push({ t: this.t, acc: accuracy(c.recipe!, c.idealAtOrder!, cfg) });
@@ -313,14 +383,24 @@ export class Game {
     if (c.table !== undefined) {
       const tb = this.tables[c.table];
       this.tableFinishes++;
-      if (tb.stationed) {
+      const w = tb.stationed;
+      if (w) {
         this.watchedFinishes++;
-        this.deliverReport(tb.stationed.owner, c, 'waiter');
+        this.deliverReport(w.owner, c, 'waiter');
+        if (cfg.waiterAutoReturn) this.sendHome(w);
       }
       tb.customer = null;
     }
     if (this.rng.next() < cfg.commentCardRate) this.deliverReport(c.restaurant, c, 'card');
-    this.customers.delete(c.id);
+
+    if (cfg.customerWalkIn) {
+      const here = legPos(c, this.t);
+      const exit = this.entrances.reduce((a, b) => (dist(a, here) <= dist(b, here) ? a : b));
+      c.state = 'leaving';
+      this.setLeg(c, exit, cfg.customerSpeed);
+    } else {
+      this.customers.delete(c.id);
+    }
   }
 
   private deliverReport(to: number, c: Customer, source: 'waiter' | 'card') {
@@ -345,6 +425,7 @@ export class Game {
       source,
     };
     this.reports[to].push(report);
+    this.emit(to, { type: 'report', t: this.t, report });
     this.reportLog.push({
       ...report,
       idealAtOrder: idealV,
@@ -355,32 +436,40 @@ export class Game {
 
   // ---------------------------------------------------------------- waiters
 
-  private waiterPos(w: Waiter): Vec {
-    const t = this.t;
-    if (t >= w.arriveAt || w.arriveAt <= w.departAt) return w.to;
-    const f = (t - w.departAt) / (w.arriveAt - w.departAt);
-    return { x: w.from.x + (w.to.x - w.from.x) * f, y: w.from.y + (w.to.y - w.from.y) * f };
-  }
-
-  private assignWaiter(w: Waiter, table: number | null) {
-    if (table !== null && (table < 0 || table >= this.tables.length)) return;
-    if (table !== null && (w.target === table)) return;
-    const here = this.waiterPos(w);
+  private unstation(w: Waiter) {
     if (w.stationed !== null) {
       this.tables[w.stationed].stationed = null;
       w.stationed = null;
     }
-    w.from = here;
-    w.departAt = this.t;
+    w.idleSince = null;
+  }
+
+  private sendHome(w: Waiter) {
+    this.unstation(w);
+    w.target = null;
+    this.setLeg(w, this.doorPos[w.owner], this.cfg.waiterSpeed);
+  }
+
+  private assignWaiter(w: Waiter, table: number | null) {
+    if (table !== null && (table < 0 || table >= this.tables.length)) return;
+    if (table !== null && w.target === table) return;
+    this.unstation(w);
     if (table === null) {
-      w.to = here;
-      w.arriveAt = this.t;
-      w.target = null;
+      if (this.cfg.waiterAutoReturn) {
+        this.sendHome(w);
+      } else {
+        const here = legPos(w, this.t);
+        Object.assign(w, { from: here, to: here, departAt: this.t, arriveAt: this.t, target: null });
+      }
       return;
     }
-    w.to = this.tables[table].pos;
-    w.arriveAt = this.t + dist(here, w.to) / this.cfg.waiterSpeed;
     w.target = table;
+    this.setLeg(w, this.tables[table].pos, this.cfg.waiterSpeed);
+  }
+
+  private waiterState(w: Waiter): 'home' | 'out' | 'returning' {
+    if (w.target !== null) return 'out';
+    return this.t >= w.arriveAt && dist(w.to, this.doorPos[w.owner]) < 1e-6 ? 'home' : 'returning';
   }
 
   // ---------------------------------------------------------------- public API
@@ -395,9 +484,21 @@ export class Game {
         Math.max(this.closedUntil[player], this.t) + points * this.cfg.retoolSecPerPoint;
       this.money[player] -= points * this.cfg.retoolCostPerPoint;
       this.recipeChanges[player]++;
+      this.emit('all', { type: 'recipe', t: this.t, restaurant: player, recipe: [...next] as Recipe });
     } else if (action.type === 'assignWaiter') {
       const w = this.waiters.find((x) => x.owner === player && x.idx === action.idx);
       if (w) this.assignWaiter(w, action.table);
+    } else if (action.type === 'sendWaiter') {
+      const tb = this.tables[action.table];
+      if (!tb) return;
+      const mine = this.waiters.filter((w) => w.owner === player);
+      if (mine.some((w) => w.target === action.table)) return;
+      const free = mine.filter((w) => w.target === null);
+      if (free.length === 0) return;
+      const best = free.reduce((a, b) =>
+        dist(legPos(a, this.t), tb.pos) <= dist(legPos(b, this.t), tb.pos) ? a : b,
+      );
+      this.assignWaiter(best, action.table);
     }
   }
 
@@ -419,6 +520,19 @@ export class Game {
       this.nextArrival += this.rng.exp(cfg.arrivalMeanSec);
     }
 
+    for (const c of [...this.customers.values()]) {
+      if (c.state === 'entering' && t >= c.arriveAt) {
+        c.state = 'queued';
+        this.queues[c.restaurant].push(c.id);
+      } else if (c.state === 'walking' && t >= c.arriveAt) {
+        c.state = 'seated';
+      } else if (c.state === 'seated' && t >= c.finishAt!) {
+        this.finish(c);
+      } else if (c.state === 'leaving' && t >= c.arriveAt) {
+        this.customers.delete(c.id);
+      }
+    }
+
     for (let r = 0; r < cfg.players; r++) {
       const cid = this.cooking[r];
       if (cid !== null) {
@@ -430,20 +544,24 @@ export class Game {
       }
     }
 
-    for (const c of [...this.customers.values()]) {
-      if (c.state === 'walking' && t >= c.arriveAt!) c.state = 'seated';
-      if (c.state === 'seated' && t >= c.finishAt!) this.finish(c);
-    }
-
     for (const w of this.waiters) {
       if (w.target !== null && w.stationed === null && t >= w.arriveAt) {
         const tb = this.tables[w.target];
         if (tb.stationed && tb.stationed !== w) {
-          w.target = null; // lost the race: someone is already there
+          // Lost the race: someone is already there.
+          this.emit(w.owner, { type: 'blocked', t, table: tb.id });
+          if (cfg.waiterAutoReturn) this.sendHome(w);
+          else w.target = null;
         } else {
           tb.stationed = w;
           w.stationed = tb.id;
         }
+      }
+      if (cfg.waiterAutoReturn && w.stationed !== null) {
+        const tb = this.tables[w.stationed];
+        if (tb.customer !== null) w.idleSince = null;
+        else if (w.idleSince === null) w.idleSince = t;
+        else if (t - w.idleSince >= cfg.waiterIdleReturnSec) this.sendHome(w);
       }
     }
 
@@ -460,6 +578,7 @@ export class Game {
   }
 
   observe(player: number): Observation {
+    const t = this.t;
     const tables: TableView[] = this.tables.map((tb) => {
       const c = tb.customer !== null ? this.customers.get(tb.customer)! : null;
       return {
@@ -469,7 +588,7 @@ export class Game {
           ? {
               restaurant: c.restaurant,
               seated: c.state === 'seated',
-              arriveAt: c.arriveAt!,
+              arriveAt: c.arriveAt,
               finishAt: c.finishAt!,
             }
           : null,
@@ -478,8 +597,31 @@ export class Game {
           .map((w) => ({ owner: w.owner, arrived: w.stationed === tb.id })),
       };
     });
+    const customers: CustomerView[] = [...this.customers.values()].map((c) => ({
+      id: c.id,
+      restaurant: c.restaurant,
+      state: c.state,
+      from: c.from,
+      to: c.to,
+      departAt: c.departAt,
+      arriveAt: c.arriveAt,
+      queueIdx: c.state === 'queued' ? this.queues[c.restaurant].indexOf(c.id) : -1,
+      table: c.table ?? null,
+      hasPizza: c.state === 'walking' || c.state === 'seated',
+    }));
+    const waiters: PublicWaiterView[] = this.waiters.map((w) => ({
+      owner: w.owner,
+      idx: w.idx,
+      state: this.waiterState(w),
+      target: w.target,
+      stationed: w.stationed,
+      from: w.from,
+      to: w.to,
+      departAt: w.departAt,
+      arriveAt: w.arriveAt,
+    }));
     return {
-      t: this.t,
+      t,
       me: player,
       cfg: this.cfg,
       recipes: this.recipes.map((r) => [...r] as Recipe),
@@ -495,12 +637,16 @@ export class Game {
         .filter((w) => w.owner === player)
         .map((w) => ({
           idx: w.idx,
-          pos: this.waiterPos(w),
+          pos: legPos(w, t),
           target: w.target,
           arriveAt: w.arriveAt,
           stationed: w.stationed,
         })),
       restaurantPos: this.restaurantPos,
+      doorPos: this.doorPos,
+      entrances: this.entrances,
+      customers,
+      waiters,
     };
   }
 }

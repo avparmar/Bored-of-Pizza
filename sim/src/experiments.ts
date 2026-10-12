@@ -20,7 +20,7 @@ interface Experiment {
 // ------------------------------------------------------------------ round 1
 
 /** Round 1 ran before these were changed; pin them so the suite stays reproducible. */
-const R1: Partial<Config> = { shareP: 2, eatSec: 7 };
+const R1: Partial<Config> = { shareP: 2, eatSec: 7, customerWalkIn: false, waiterAutoReturn: false };
 const MIXED = ['searcher', 'hybrid', 'copycat', 'static'];
 
 const round1: Experiment[] = [
@@ -113,12 +113,18 @@ const round1: Experiment[] = [
 // ------------------------------------------------------------------ round 2
 
 const SMART = ['analyst', 'hybrid', 'hawk', 'searcher'];
+/**
+ * Round 2 ran before customers walked in and waiters walked home; this pins those off.
+ * Customers now also leave from the shop door rather than its centre, so reruns differ slightly
+ * from the committed round2.md (reports arrive ~2s sooner).
+ */
+const R2: Partial<Config> = { customerWalkIn: false, waiterAutoReturn: false };
 
 const round2: Experiment[] = [
   {
     title: '1. New baseline',
     question: 'Signed-off defaults (p=1, eat 4.5s, drift every 20s, no retool cost), with the new analyst bot.',
-    batches: [{ label: 'Default config', lineup: SMART }],
+    batches: [{ label: 'Default config', lineup: SMART, overrides: R2 }],
   },
   {
     title: '2. Doing the math on public money',
@@ -127,7 +133,7 @@ const round2: Experiment[] = [
     batches: [0, 0.2, 0.4].map((tipNoise) => ({
       label: `tip noise ±${Math.round(tipNoise * 100)}%`,
       lineup: ['analyst', 'hybrid', 'hybrid', 'hybrid'],
-      overrides: { tipNoise },
+      overrides: { ...R2, tipNoise },
     })),
   },
   {
@@ -136,7 +142,7 @@ const round2: Experiment[] = [
     batches: (['none', 'all', 'own'] as const).map((m, i) => ({
       label: `${'ABC'[i]}: magnitude=${m}`,
       lineup: ['analyst', 'hybrid', 'hawk', 'analyst'],
-      overrides: { magnitude: m },
+      overrides: { ...R2, magnitude: m },
     })),
   },
   {
@@ -146,7 +152,7 @@ const round2: Experiment[] = [
     batches: [2, 3, 4].map((waiterSpeed) => ({
       label: `waiter speed ${waiterSpeed}`,
       lineup: ['analyst', 'hybrid', 'hawk', 'hybrid'],
-      overrides: { waiterSpeed },
+      overrides: { ...R2, waiterSpeed },
     })),
     note: () => {
       const rows = [2, 3, 4].map((ws) => {
@@ -167,15 +173,15 @@ const round2: Experiment[] = [
     title: '5. Is copying still too cheap?',
     question: 'Copycat among intel gatherers, under the new defaults.',
     batches: [
-      { label: 'vs searchers', lineup: ['searcher', 'searcher', 'searcher', 'copycat'] },
-      { label: 'vs hybrids', lineup: ['hybrid', 'hybrid', 'hybrid', 'copycat'] },
-      { label: 'vs analysts', lineup: ['analyst', 'analyst', 'analyst', 'copycat'] },
+      { label: 'vs searchers', lineup: ['searcher', 'searcher', 'searcher', 'copycat'], overrides: R2 },
+      { label: 'vs hybrids', lineup: ['hybrid', 'hybrid', 'hybrid', 'copycat'], overrides: R2 },
+      { label: 'vs analysts', lineup: ['analyst', 'analyst', 'analyst', 'copycat'], overrides: R2 },
     ],
   },
   {
     title: '6. p=1 vs p=2, smarter bots',
     question: 'Confirms the p=1 decision with the new lineup.',
-    batches: [1, 2].map((shareP) => ({ label: `p=${shareP}`, lineup: SMART, overrides: { shareP } })),
+    batches: [1, 2].map((shareP) => ({ label: `p=${shareP}`, lineup: SMART, overrides: { ...R2, shareP } })),
   },
 ];
 
