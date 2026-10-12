@@ -106,7 +106,7 @@ export const defaultConfig: Config = {
   startingIntel: true,
 
   idealEdgeBias: 0.3,
-  driftEverySec: 5,
+  driftEverySec: 20,
   driftStep: 1,
   trendShiftTimes: [150, 300, 450],
   trendShiftIngredients: 2,
