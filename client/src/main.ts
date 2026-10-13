@@ -694,6 +694,8 @@ function tick(now: number, draw: boolean) {
     refreshBoard(obs);
     refreshPregame(obs);
     refreshRecipeBoard(obs);
+    // A guest's first view arrives after the match screen is set up, so keep checking for the tip-off.
+    if (session.human !== null) refreshTipoff(obs);
     if (publicHist.length === 0 || obs.t - publicHist[publicHist.length - 1].t >= 1) {
       publicHist.push({ t: obs.t, money: [...obs.money], served: [...obs.served] });
       if (publicHist.length > 90) publicHist.shift();
