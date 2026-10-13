@@ -39,9 +39,20 @@ export class Session {
 
   readonly skill: BotSkill;
 
-  /** Skip the rest of the blind pick phase. */
+  /** Skip the rest of the blind pick phase (bots still get to make their blind pick first). */
   ready() {
+    if (this.game.phase === 'pregame' && this.nextDecision === 0) {
+      this.runBots();
+      this.nextDecision = 1;
+    }
     this.game.act(this.human ?? 0, { type: 'ready' });
+  }
+
+  private runBots() {
+    this.bots.forEach((b, p) => {
+      if (!b) return;
+      for (const a of b.decide(this.game.observe(p))) this.game.act(p, a);
+    });
   }
 
   get done() {
@@ -61,10 +72,7 @@ export class Session {
     this.acc += Math.min(realDt, 0.25) * this.speed;
     while (this.acc >= tickSec && !this.game.done) {
       if (this.game.t >= this.nextDecision - 1e-9) {
-        this.bots.forEach((b, p) => {
-          if (!b) return;
-          for (const a of b.decide(this.game.observe(p))) this.game.act(p, a);
-        });
+        this.runBots();
         this.nextDecision += 1;
       }
       this.game.step();
