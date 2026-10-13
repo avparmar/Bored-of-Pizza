@@ -168,3 +168,17 @@ summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .card td.num, .card th.num { text-align: right; font-family: ui-monospace, monospace; }
 #end-chart, #end-money { width: 100%; height: 200px; display: block; }
 .legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+
+/* Multiplayer lobby */
+.field { display: block; margin: 10px 0; font-weight: 600; }
+.field input { display: block; margin-top: 4px; padding: 7px 9px; font-size: 16px; border: 1px solid var(--line); border-radius: 6px; width: 260px; }
+.room-code { font: 800 32px ui-monospace, monospace; letter-spacing: 0.12em; background: #fff4d6; padding: 0 10px; border-radius: 8px; }
+.invite { display: flex; gap: 6px; }
+.invite input { flex: 1; padding: 7px 9px; font: 14px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 6px; }
+.invite button { padding: 7px 14px; border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer; font-weight: 600; }
+.card h2.sub { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 16px 0 4px; }
+.lobby-list { list-style: none; padding: 0; margin: 0; }
+.lobby-list li { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+#toasts { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); z-index: 40; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+.toast { background: #2b2118; color: #fff; padding: 9px 14px; border-radius: 10px; font-size: 14px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); animation: toastIn 0.3s ease-out; }
+@keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } }

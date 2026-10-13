@@ -3,6 +3,8 @@ import { STRATEGIES, type BotSkill } from '@bop/sim';
 import { CourtRenderer, SHOP_COLORS, SHOP_NAMES, SHORT } from './render.js';
 import { Session, type Seat } from './session.js';
 import { showEnd } from './endscreen.js';
+import type { Match } from './match.js';
+import { GuestLobby, HostLobby, HostMatch, normalizeCode, RemoteMatch } from './net.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -38,6 +40,7 @@ const settings = {
   shareCap: 1,
   shiftIngredients: 2,
   shiftRamp: 0,
+  showTicks: true,
   autoFollow: false,
   verdict: false,
   bag: true,
@@ -48,7 +51,11 @@ const settings = {
 
 const canvas = $<HTMLCanvasElement>('court');
 const renderer = new CourtRenderer(canvas);
-let session: Session | null = null;
+let session: Match | null = null;
+let hostLobby: HostLobby | null = null;
+let guestLobby: GuestLobby | null = null;
+let noticesShown = 0;
+let ended = false;
 let draft: Recipe = [11, 11, 11, 11];
 let lastUi = 0;
 let lastFrame = performance.now();
@@ -64,12 +71,8 @@ let bannerTimer: number | undefined;
 
 // ------------------------------------------------------------------ start / restart
 
-function start(seats: Seat[]) {
-  settings.seats = seats;
-  session = new Session({
-    seats,
-    skill: settings.skill,
-    overrides: {
+function gameOverrides() {
+  return {
       seed: settings.seed,
       magnitude: settings.magnitude,
       arrivalMeanSec: settings.arrivalMeanSec,
@@ -82,12 +85,30 @@ function start(seats: Seat[]) {
       reportVerdict: settings.verdict,
       reportBag: settings.bag,
       headlineNames: settings.headlineNames,
-    },
-  });
-  if (session.human === null) session.ready(); // spectators skip the blind pick
-  session.speed = Number($<HTMLSelectElement>('speed').value);
-  const obs = session.game.observe(session.human ?? 0);
-  draft = [...obs.recipes[session.human ?? 0]] as Recipe;
+  };
+}
+
+function start(seats: Seat[]) {
+  settings.seats = seats;
+  const solo = new Session({ seats, skill: settings.skill, overrides: gameOverrides() });
+  if (solo.human === null) solo.ready(); // spectators skip the blind pick
+  solo.speed = Number($<HTMLSelectElement>('speed').value);
+  beginMatch(solo);
+}
+
+/** Set up the UI for a match, wherever it runs (this tab, or a host's tab over the network). */
+function beginMatch(m: Match) {
+  session?.dispose();
+  session = m;
+  noticesShown = 0;
+  ended = false;
+  $('speed').classList.toggle('hidden', !m.canControlTime || m.multiplayer);
+  $('btn-pause').classList.toggle('hidden', !m.canControlTime);
+  $('btn-pause').textContent = '⏸';
+  const obs = m.obs();
+  const me = m.human ?? 0;
+  const mid = Math.round((m.cfg.scale + 1) / 2);
+  draft = (obs.recipes[me]?.some((v) => v > 0) ? [...obs.recipes[me]] : [mid, mid, mid, mid]) as Recipe;
   buildRecipeRows();
   $('intel-latest').innerHTML = '';
   $('intel-history').innerHTML = '';
@@ -100,21 +121,30 @@ function start(seats: Seat[]) {
   $('nudge').classList.add('hidden');
   $('trend-banner').classList.add('hidden');
   $('tip-meter').innerHTML = '';
-  $('headline').textContent = human0(seats) ? 'Blind pick: choose your opening recipe.' : 'Doors open!';
-  const human = session.human !== null;
+  $('headline').textContent = m.human !== null ? 'Blind pick: choose your opening recipe.' : 'Doors open!';
+  const human = m.human !== null;
   $('recipe-panel').classList.toggle('hidden', !human);
   $('intel-panel').classList.toggle('hidden', !human);
   $('intel-strip').classList.toggle('hidden', !human);
-  const tip = obs.startingIntel;
-  $('tipoff').innerHTML = tip
-    ? `🕵️ <b>Your tip-off:</b> at opening, customers want <b>${NAMES[tip.ingredient]} ${tip.value}</b>. Nobody else knows this one, and tastes drift.`
-    : '';
+  $('tipoff').innerHTML = '';
+  refreshTipoff(obs);
   $('overlay').innerHTML = '';
-  renderer.resize(obs.cfg.courtSize);
+  renderer.resize(m.cfg.courtSize);
 }
 
-function human0(seats: Seat[]) {
-  return seats.includes('human');
+function refreshTipoff(obs: Observation) {
+  const tip = obs.startingIntel;
+  if (!tip || $('tipoff').innerHTML) return;
+  $('tipoff').innerHTML = `🕵️ <b>Your tip-off:</b> at opening, customers want <b>${NAMES[tip.ingredient]} ${tip.value}</b>. Nobody else knows this one, and tastes drift.`;
+}
+
+/** Name shown for a shop: "You", a player's name, or the shop colour for bots. */
+function shopLabel(p: number) {
+  const s = session!;
+  if (p === s.human) return 'You';
+  if (s.seats[p] === 'human' && s.names[p]) return s.names[p];
+  if (s.human === null) return `${SHOP_NAMES[p]} <span class="served">(${s.seats[p]})</span>`;
+  return s.multiplayer ? `${SHOP_NAMES[p]} <span class="served">(bot)</span>` : SHOP_NAMES[p];
 }
 
 function newSeed() {
@@ -126,11 +156,8 @@ function newSeed() {
   $<HTMLSelectElement>('dbg-headline').value = settings.headlineNames;
 }
 
-function showStart() {
-  $('overlay').innerHTML = `
-    <div class="card">
-      <h1>🍕 Bored of Pizza <small style="font-size:14px;color:#8a7a68">prototype</small></h1>
-      <p>You run the <b style="color:${SHOP_COLORS[0]}">red</b> pizzeria in a mall food court.
+const RULES = `
+      <p>You run a pizzeria in a mall food court.
       Pizzas sell at cost, so you earn only from <b>tips</b>, and customers tip more the closer your
       pizza is to today's taste. Nobody knows exactly what that taste is, and it keeps changing.</p>
       <ul>
@@ -145,9 +172,54 @@ function showStart() {
         <li>Your tips pop up over the table where the diner ate: a big tip means you're close.</li>
         <li>Better pizza brings more customers. Watch the headlines for big trend shifts.</li>
         <li>Most money after 10 minutes wins.</li>
-      </ul>
+      </ul>`;
+
+function loadName() {
+  try {
+    return localStorage.getItem('bop-name') ?? '';
+  } catch {
+    return '';
+  }
+}
+function saveName(n: string) {
+  try {
+    localStorage.setItem('bop-name', n);
+  } catch {
+    /* private window: fine */
+  }
+}
+function esc(t: string) {
+  return t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+function joinParam() {
+  return normalizeCode(new URLSearchParams(location.search).get('join') ?? '');
+}
+
+function leaveLobbies() {
+  hostLobby?.close();
+  hostLobby = null;
+  guestLobby?.close();
+  guestLobby = null;
+}
+
+function showStart() {
+  leaveLobbies();
+  const code = joinParam();
+  if (code) {
+    // Arrived from an invite link: go straight to joining (once).
+    const u = new URL(location.href);
+    u.searchParams.delete('join');
+    history.replaceState(null, '', u.toString());
+    return showJoin(code);
+  }
+  $('overlay').innerHTML = `
+    <div class="card">
+      <h1>🍕 Bored of Pizza <small style="font-size:14px;color:#8a7a68">prototype</small></h1>
+      ${RULES}
       <div class="buttons">
         <button class="primary" id="go-play">Play vs 3 bots</button>
+        <button id="go-host">Host a game with friends</button>
+        <button id="go-join">Join a game</button>
         <button id="go-spectate">Watch 4 bots</button>
       </div>
     </div>`;
@@ -155,10 +227,154 @@ function showStart() {
     newSeed();
     start(settings.seats.includes('human') ? settings.seats : ['human', 'hybrid', 'analyst', 'hawk']);
   };
+  $('go-host').onclick = () => showHost();
+  $('go-join').onclick = () => showJoin('');
   $('go-spectate').onclick = () => {
     newSeed();
     start(['hybrid', 'analyst', 'hawk', 'searcher']);
   };
+}
+
+function nameField() {
+  return `<label class="field">Your name <input id="mp-name" maxlength="16" value="${esc(loadName())}" placeholder="e.g. Sam" /></label>`;
+}
+function readName() {
+  const n = ($<HTMLInputElement>('mp-name').value.trim() || 'Player').slice(0, 16);
+  saveName(n);
+  return n;
+}
+
+function playerList(players: { seat: number; name: string; host: boolean }[]) {
+  return `<ul class="lobby-list">${[0, 1, 2, 3]
+    .map((seat) => {
+      const pl = players.find((x) => x.seat === seat);
+      return `<li><span class="swatch" style="background:${SHOP_COLORS[seat]}"></span> ${
+        pl ? `<b>${esc(pl.name)}</b>${pl.host ? ' <span class="served">(host)</span>' : ''}` : '<span class="served">bot (open seat)</span>'
+      }</li>`;
+    })
+    .join('')}</ul>`;
+}
+
+function showHost() {
+  $('overlay').innerHTML = `
+    <div class="card">
+      <h1>Host a game</h1>
+      <p>Your browser runs the game for everyone, so <b>keep this tab open</b> until it ends.
+      Up to 3 friends can join; bots fill the empty shops.</p>
+      ${nameField()}
+      <div class="buttons"><button class="primary" id="mp-open">Create room</button><button id="mp-back">Back</button></div>
+    </div>`;
+  $('mp-back').onclick = showStart;
+  $('mp-open').onclick = async () => {
+    const name = readName();
+    const lobby = new HostLobby(name);
+    hostLobby = lobby;
+    $('overlay').innerHTML = `<div class="card"><h1>Opening a room…</h1></div>`;
+    try {
+      await lobby.open();
+    } catch (err) {
+      if (hostLobby !== lobby) return;
+      return showError((err as Error).message);
+    }
+    if (hostLobby !== lobby) return;
+    const url = new URL(location.href);
+    url.search = '';
+    url.searchParams.set('join', lobby.code);
+    // Keep a local test server setting in the invite link.
+    for (const k of ['peerHost', 'peerPort', 'peerPath', 'peerSecure']) {
+      const v = new URLSearchParams(location.search).get(k);
+      if (v) url.searchParams.set(k, v);
+    }
+    const link = url.toString();
+    const render = () => {
+      if (hostLobby !== lobby) return;
+      $('overlay').innerHTML = `
+        <div class="card">
+          <h1>Room <span class="room-code">${lobby.code}</span></h1>
+          <p>Send your friends this link (or the code):</p>
+          <div class="invite"><input id="mp-link" readonly value="${esc(link)}" /><button id="mp-copy">Copy</button></div>
+          <h2 class="sub">Players</h2>
+          ${playerList(lobby.players)}
+          <p class="served">Game settings come from the ⚙ panel. Keep this tab open (it's running the game).</p>
+          <div class="buttons"><button class="primary" id="mp-start">Start game</button><button id="mp-cancel">Cancel</button></div>
+        </div>`;
+      $('mp-copy').onclick = () => {
+        $<HTMLInputElement>('mp-link').select();
+        navigator.clipboard?.writeText(link).then(
+          () => ($('mp-copy').textContent = 'Copied!'),
+          () => document.execCommand('copy'),
+        );
+      };
+      $('mp-cancel').onclick = showStart;
+      $('mp-start').onclick = () => {
+        newSeed();
+        const botLineup = settings.seats.map((x) => (x === 'human' ? 'hybrid' : x)) as Seat[];
+        const m = lobby.start({ overrides: gameOverrides(), skill: settings.skill, botLineup });
+        hostLobby = null; // the match owns the connections now
+        beginMatch(m);
+      };
+    };
+    lobby.onChange = render;
+    lobby.onError = (msg) => toast(msg);
+    render();
+  };
+}
+
+function showJoin(code: string) {
+  $('overlay').innerHTML = `
+    <div class="card">
+      <h1>Join a game</h1>
+      <label class="field">Room code <input id="mp-code" maxlength="6" value="${esc(code)}" placeholder="ABCD" style="text-transform:uppercase" /></label>
+      ${nameField()}
+      <div class="buttons"><button class="primary" id="mp-join">Join</button><button id="mp-back">Back</button></div>
+    </div>`;
+  $('mp-back').onclick = showStart;
+  (code ? $<HTMLInputElement>('mp-name') : $<HTMLInputElement>('mp-code')).focus();
+  const go = async () => {
+    const c = normalizeCode($<HTMLInputElement>('mp-code').value);
+    if (c.length < 4) return;
+    const name = readName();
+    const lobby = new GuestLobby();
+    guestLobby = lobby;
+    $('overlay').innerHTML = `<div class="card"><h1>Connecting to ${c}…</h1></div>`;
+    const render = () => {
+      if (guestLobby !== lobby) return;
+      $('overlay').innerHTML = `
+        <div class="card">
+          <h1>Room <span class="room-code">${c}</span></h1>
+          <p>You're in! You'll play the <b style="color:${SHOP_COLORS[lobby.seat]}">${SHOP_NAMES[lobby.seat].toLowerCase()}</b> shop.
+          Waiting for the host to start…</p>
+          ${playerList(lobby.players)}
+          <div class="buttons"><button id="mp-leave">Leave</button></div>
+        </div>`;
+      $('mp-leave').onclick = showStart;
+    };
+    lobby.onChange = render;
+    lobby.onStart = (m) => {
+      guestLobby = null; // the match owns the connection now
+      beginMatch(m);
+    };
+    lobby.onError = (msg) => {
+      if (guestLobby === lobby) showError(msg);
+      else toast(msg);
+    };
+    try {
+      await lobby.join(c, name);
+    } catch (err) {
+      if (guestLobby === lobby) showError((err as Error).message);
+      return;
+    }
+    render();
+  };
+  $('mp-join').onclick = go;
+  $('overlay').querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (e) => e.key === 'Enter' && go()));
+}
+
+function showError(msg: string) {
+  leaveLobbies();
+  $('overlay').innerHTML = `<div class="card"><h1>Hmm.</h1><p>${esc(msg)}</p>
+    <div class="buttons"><button class="primary" id="mp-back">Back</button></div></div>`;
+  $('mp-back').onclick = showStart;
 }
 
 // ------------------------------------------------------------------ recipe panel
@@ -166,7 +382,7 @@ function showStart() {
 function buildRecipeRows() {
   const rows = $('recipe-rows');
   rows.innerHTML = '';
-  const scale = session!.game.cfg.scale;
+  const scale = session!.cfg.scale;
   NAMES.forEach((name, i) => {
     const row = document.createElement('div');
     row.className = 'recipe-row';
@@ -193,13 +409,13 @@ function buildRecipeRows() {
 }
 
 function setDraft(i: number, v: number) {
-  const scale = session!.game.cfg.scale;
+  const scale = session!.cfg.scale;
   draft[i] = Math.max(1, Math.min(scale, Math.round(v)));
   refreshRecipe();
 }
 
 function currentRecipe(): Recipe {
-  return session!.game.recipes[session!.human ?? 0];
+  return session!.obs().recipes[session!.human ?? 0];
 }
 
 function refreshRecipe() {
@@ -215,10 +431,10 @@ function refreshRecipe() {
     if (draft[i] !== cur[i]) dirty = true;
   }
   // Rivals' current values as coloured ticks on each slider.
-  const obs = session.game.observe(session.human);
-  const scale = session.game.cfg.scale;
+  const obs = session.obs();
+  const scale = session.cfg.scale;
   for (let i = 0; i < 4; i++) {
-    const hidden = obs.phase === 'pregame';
+    const hidden = obs.phase === 'pregame' || !settings.showTicks;
     // One tick per value; rivals sharing a value stack their colours side by side.
     const byValue = new Map<number, number[]>();
     obs.recipes.forEach((r, p) => {
@@ -321,7 +537,7 @@ function refreshRecipeBoard(obs: Observation) {
   const rows = order
     .map((p) => {
       const isMe = p === s.human;
-      const name = isMe ? 'You' : SHOP_NAMES[p];
+      const name = shopLabel(p);
       const changed = obs.t - recipeChangedAt[p] < 1.5 ? 'changed' : '';
       const cells = obs.recipes[p]
         .map((v, i) => {
@@ -392,7 +608,7 @@ function refreshPregame(obs: Observation) {
 }
 
 function fmtClock(t: number, remaining = true) {
-  const total = session?.game.cfg.durationSec ?? 600;
+  const total = session?.cfg.durationSec ?? 600;
   const s = Math.max(0, Math.ceil(remaining ? total - t : t));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
@@ -403,7 +619,7 @@ function refreshBoard(obs: Observation) {
   $('leaderboard').innerHTML = order
     .map(({ m, i }) => {
       const me = i === s.human;
-      const label = me ? 'You' : s.human === null ? `${SHOP_NAMES[i]} <span class="served">(${s.seats[i]})</span>` : SHOP_NAMES[i];
+      const label = shopLabel(i);
       return `<li class="${me ? 'me' : ''}"><span class="swatch" style="background:${SHOP_COLORS[i]}"></span>
         <span>${label}</span><span class="served">${obs.served[i]} served</span><span class="money">$${m.toFixed(0)}</span></li>`;
     })
@@ -462,49 +678,100 @@ function handleEvents(evs: GameEvent[], obs: Observation) {
 
 // ------------------------------------------------------------------ main loop
 
-function frame(now: number) {
+/** Advance the match and refresh the UI. `draw` is false when a hidden host tab is kept ticking. */
+function tick(now: number, draw: boolean) {
   const dt = (now - lastFrame) / 1000;
   lastFrame = now;
-  if (session) {
-    const evs = session.update(dt);
-    const viewer = session.human ?? 0;
-    const obs = session.game.observe(viewer);
-    handleEvents(evs, obs);
-    renderer.draw(obs, session.renderTime, session.human, settings.reveal ? session.game.ideal : null);
-    if (now - lastUi > 200) {
-      lastUi = now;
-      refreshBoard(obs);
-      refreshPregame(obs);
-      refreshRecipeBoard(obs);
-      if (publicHist.length === 0 || obs.t - publicHist[publicHist.length - 1].t >= 1) {
-        publicHist.push({ t: obs.t, money: [...obs.money], served: [...obs.served] });
-        if (publicHist.length > 90) publicHist.shift();
-      }
-      if (session.human !== null) {
-        refreshIntel(obs);
-        refreshRecipe();
-        refreshTipMeter(obs);
-        checkNudge(obs);
-      }
+  if (!session) return;
+  const evs = session.update(dt);
+  const obs = session.obs();
+  if (obs.restaurantPos.length === 0) return; // joined, but the host's first update hasn't arrived
+  handleEvents(evs, obs);
+  showNotices();
+  if (draw) renderer.draw(obs, session.renderTime, session.human, settings.reveal ? session.ideal : null);
+  if (draw && now - lastUi > 200) {
+    lastUi = now;
+    refreshBoard(obs);
+    refreshPregame(obs);
+    refreshRecipeBoard(obs);
+    if (publicHist.length === 0 || obs.t - publicHist[publicHist.length - 1].t >= 1) {
+      publicHist.push({ t: obs.t, money: [...obs.money], served: [...obs.served] });
+      if (publicHist.length > 90) publicHist.shift();
     }
-    if (session.done && !$('overlay').innerHTML) {
-      showEnd(session, {
-        again: () => {
+    if (session.human !== null) {
+      refreshIntel(obs);
+      refreshRecipe();
+      refreshTipMeter(obs);
+      checkNudge(obs);
+    }
+  }
+  if (session.done && !ended) {
+    ended = true;
+    finishMatch();
+  }
+}
+
+function frame(now: number) {
+  tick(now, true);
+  requestAnimationFrame(frame);
+}
+
+// Browsers stop animation frames in background tabs. A host's tab runs everyone's game, so
+// keep it ticking with a timer (browsers slow these to about once a second, which is enough).
+window.setInterval(() => {
+  if (document.hidden && session instanceof HostMatch) tick(performance.now(), false);
+}, 250);
+
+function finishMatch() {
+  const s = session!;
+  const data = s.endData();
+  const remote = s instanceof RemoteMatch;
+  const note = remote && s.lostHost ? 'The host left, so the game ended early.' : undefined;
+  const menu = () => {
+    session?.dispose();
+    session = null;
+    showStart();
+  };
+  if (!data) {
+    $('overlay').innerHTML = `<div class="card"><h1>Game over</h1><p>${note ?? 'The game ended.'}</p>
+      <div class="buttons"><button class="primary" id="end-menu">Main menu</button></div></div>`;
+    $('end-menu').onclick = menu;
+    return;
+  }
+  const withLog = s as Match & { telemetry?: () => object };
+  showEnd(data, {
+    again: s.multiplayer
+      ? null
+      : () => {
           newSeed();
           start(settings.seats);
         },
-        menu: showStart,
-      });
-    }
-  }
-  requestAnimationFrame(frame);
+    menu,
+    log: () => (withLog.telemetry ? withLog.telemetry() : { version: 2, savedAt: new Date().toISOString(), ...data }),
+    note,
+  });
+}
+
+/** Short messages from the network (a player left, etc.). */
+function showNotices() {
+  const list = (session as { notices?: string[] } | null)?.notices;
+  if (!list) return;
+  while (noticesShown < list.length) toast(list[noticesShown++]);
+}
+
+function toast(text: string) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = text;
+  $('toasts').appendChild(el);
+  window.setTimeout(() => el.remove(), 6000);
 }
 
 // ------------------------------------------------------------------ input
 
 canvas.addEventListener('mousemove', (e) => {
   if (!session || session.human === null) return;
-  const obs = session.game.observe(session.human);
+  const obs = session.obs();
   // Your own customers take priority over tables under the cursor.
   renderer.hoverCustomer = renderer.customerAt(e.offsetX, e.offsetY, session.human);
   renderer.hoverTable = renderer.hoverCustomer === null ? renderer.tableAt(obs, e.offsetX, e.offsetY) : null;
@@ -521,7 +788,7 @@ canvas.addEventListener('click', (e) => {
     session.act({ type: 'followCustomer', customer: cust });
     return;
   }
-  const obs = session.game.observe(session.human);
+  const obs = session.obs();
   const tb = renderer.tableAt(obs, e.offsetX, e.offsetY);
   if (tb !== null) session.act({ type: 'sendWaiter', table: tb });
 });
@@ -531,7 +798,7 @@ canvas.addEventListener('contextmenu', (e) => {
   if (!session || session.human === null) return;
   let idx = renderer.waiterAt(e.offsetX, e.offsetY);
   if (idx === null) {
-    const obs = session.game.observe(session.human);
+    const obs = session.obs();
     const tb = renderer.tableAt(obs, e.offsetX, e.offsetY);
     const w = obs.myWaiters.find((x) => tb !== null && x.target === tb);
     if (w) idx = w.idx;
@@ -557,8 +824,9 @@ window.addEventListener('keydown', (e) => {
     // Copy a rival's recipe into the draft (not applied until Enter).
     const rivals = [0, 1, 2, 3].filter((p) => p !== session!.human);
     const p = rivals[Number(e.key) - 1];
-    if (p !== undefined && session.game.phase === 'open') {
-      draft = [...session.game.recipes[p]] as Recipe;
+    const obs = session.obs();
+    if (p !== undefined && obs.phase === 'open') {
+      draft = [...obs.recipes[p]] as Recipe;
       refreshRecipe();
     }
     return;
@@ -572,7 +840,7 @@ window.addEventListener('keydown', (e) => {
     if (!session || session.human === null) return;
     const dirty = draft.some((v, i) => v !== currentRecipe()[i]);
     if (dirty) applyDraft();
-    else if (session.game.phase === 'pregame') session.ready();
+    else if (session.obs().phase === 'pregame') session.ready();
   } else if (e.key === 'Escape') resetDraft();
   else if (e.key === 'p' || e.key === 'P') togglePause();
   else if (e.key === '`') toggleDebug();
@@ -587,7 +855,7 @@ $('btn-pause').onclick = togglePause;
 $<HTMLSelectElement>('speed').onchange = (e) => {
   if (session) session.speed = Number((e.target as HTMLSelectElement).value);
 };
-window.addEventListener('resize', () => session && renderer.resize(session.game.cfg.courtSize));
+window.addEventListener('resize', () => session && renderer.resize(session.cfg.courtSize));
 
 // ------------------------------------------------------------------ debug panel
 
@@ -615,10 +883,15 @@ function toggleDebug() {
   $<HTMLInputElement>('dbg-verdict').checked = settings.verdict;
   $<HTMLInputElement>('dbg-bag').checked = settings.bag;
   $<HTMLSelectElement>('dbg-headline').value = settings.headlineNames;
+  $<HTMLInputElement>('dbg-ticks').checked = settings.showTicks;
 }
 $('btn-debug').onclick = toggleDebug;
 $('dbg-close').onclick = () => $('debug').classList.add('hidden');
 $<HTMLInputElement>('dbg-reveal').onchange = (e) => (settings.reveal = (e.target as HTMLInputElement).checked);
+$<HTMLInputElement>('dbg-ticks').onchange = (e) => {
+  settings.showTicks = (e.target as HTMLInputElement).checked;
+  refreshRecipe();
+};
 $('dbg-restart').onclick = () => {
   const seats = [...document.querySelectorAll<HTMLSelectElement>('#seat-selects select')].map((s) => s.value as Seat);
   // Only one human seat for now: extra ones become bots.
@@ -644,8 +917,18 @@ $('dbg-restart').onclick = () => {
   settings.shiftIngredients = Math.max(1, Math.min(4, Math.round(num('dbg-shift-n', 2))));
   settings.shiftRamp = Math.max(0, num('dbg-ramp', 0));
   $('debug').classList.add('hidden');
-  start(seats);
+  settings.seats = seats;
+  // Restarting would end a multiplayer game for everyone; keep the settings for the next one.
+  if (session?.multiplayer && !session.done) toast('Settings saved. They apply to the next game you host.');
+  else if (!hostLobby && !guestLobby) start(seats);
+  else toast('Settings saved.');
 };
+
+// Leaving the page closes connections right away, so other players hear about it immediately.
+window.addEventListener('pagehide', () => {
+  if (session?.multiplayer) session.dispose();
+  leaveLobbies();
+});
 
 showStart();
 requestAnimationFrame(frame);

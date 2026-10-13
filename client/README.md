@@ -1,6 +1,10 @@
 # Prototype client
 
-You vs 3 bots in the browser. The whole match runs in the tab (no server yet).
+Play against bots, or with friends over the internet. There's no game server: in multiplayer,
+the host's browser tab runs the game and everyone else connects to it directly.
+
+**Live build:** https://avparmar.github.io/Bored-of-Pizza/ (deployed automatically by
+`.github/workflows/pages.yml` on every push to `main` or `sim`).
 
 ```sh
 npm install        # from the repo root
@@ -23,4 +27,28 @@ npm run dev        # then open the URL it prints (usually http://localhost:5173)
   the ideal). The speed menu is in the top bar.
 - After a match, **Download match log** saves a JSON file with everything needed to compare
   your play against the bots (reports, tips, recipes over time, your actions).
-- In the browser console, `bop.session.game` is the live game.
+- In the browser console, `bop.session` is the live match (`bop.session.game` when it runs in this tab).
+
+## Multiplayer
+
+1. One person clicks **Host a game with friends**, enters a name, and gets a 4-letter room code
+   plus an invite link.
+2. Friends open the link (or click **Join a game** and type the code). Up to 3 can join; bots
+   fill any empty shops. Bot types and rules come from the host's ⚙ panel.
+3. The host clicks **Start game**. Everyone gets the 20s blind pick; doors open when every
+   player has pressed Ready (or the timer runs out).
+
+Things to know:
+- **The host must keep their tab open** until the game ends; it is running everyone's game.
+  It keeps running in a background tab, but closing it ends the game for everyone.
+- If a guest leaves or loses connection (no contact for 10s), a bot takes over their shop.
+- Speed is fixed at 1× in multiplayer; the host can still pause (P).
+- Browsers find each other through the free public PeerJS server, then talk directly
+  (WebRTC). That works on most home networks. Some strict networks (corporate, some mobile
+  carriers) block direct connections; if a friend can't join, that's the likely cause, and a
+  relay (TURN) server would fix it.
+- The host's tab knows the hidden ideal recipe, so a host *could* peek with dev tools. Fine
+  among friends.
+- To test locally without the internet: run a PeerJS server (`npx peerjs --port 9000`, or see
+  `peer` in devDependencies) and add `?peerHost=127.0.0.1&peerPort=9000&peerPath=/` to the URL.
+

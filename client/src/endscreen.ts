@@ -1,10 +1,14 @@
 import { rawDistance } from '@bop/core';
 import { SHOP_COLORS, SHOP_NAMES } from './render.js';
-import type { Session } from './session.js';
+import type { EndData } from './match.js';
 
 /** Results overlay: final standings, the ideal revealed over time, and a match log download. */
-export function showEnd(s: Session, actions: { again: () => void; menu: () => void }) {
-  const g = s.game;
+export function showEnd(
+  d: EndData,
+  actions: { again: (() => void) | null; menu: () => void; log: () => object; note?: string },
+) {
+  const g = d;
+  const s = d;
   const snaps = g.snapshots;
   const n = s.seats.length;
   const minutes = g.cfg.durationSec / 60;
@@ -35,11 +39,18 @@ export function showEnd(s: Session, actions: { again: () => void; menu: () => vo
   const won = rows[0].p === s.human;
 
   const name = (p: number, seat: string) =>
-    `<span class="swatch" style="background:${SHOP_COLORS[p]}"></span> ${p === s.human ? '<b>You</b>' : `${SHOP_NAMES[p]} <span style="color:#8a7a68">(${seat})</span>`}`;
+    `<span class="swatch" style="background:${SHOP_COLORS[p]}"></span> ${
+      p === s.human
+        ? '<b>You</b>'
+        : seat === 'human'
+          ? `${d.names[p] || SHOP_NAMES[p]}`
+          : `${SHOP_NAMES[p]} <span style="color:#8a7a68">(${seat} bot)</span>`
+    }`;
 
   const overlay = document.getElementById('overlay')!;
   overlay.innerHTML = `
     <div class="card">
+      ${actions.note ? `<p style="color:#C62828;font-weight:600">${actions.note}</p>` : ''}
       <h1>${s.human === null ? 'Match over' : won ? '🏆 You win!' : 'Time! The food court is closing.'}</h1>
       <table>
         <tr><th>#</th><th>Shop</th><th class="num">Money</th><th class="num">Served</th>
@@ -58,21 +69,21 @@ export function showEnd(s: Session, actions: { again: () => void; menu: () => vo
       </table>
       <h3 style="margin:14px 0 4px">How far each recipe was from the ideal</h3>
       <div class="legend">Total slider points off (lower is better). Dashed lines = trend shifts.
-        ${Array.from({ length: n }, (_, p) => `<span><span class="swatch" style="background:${SHOP_COLORS[p]}"></span> ${p === s.human ? 'You' : SHOP_NAMES[p]}</span>`).join('')}</div>
+        ${Array.from({ length: n }, (_, p) => `<span><span class="swatch" style="background:${SHOP_COLORS[p]}"></span> ${p === s.human ? 'You' : d.names[p] || SHOP_NAMES[p]}</span>`).join('')}</div>
       <canvas id="end-chart"></canvas>
       <h3 style="margin:14px 0 4px">Money over time</h3>
       <canvas id="end-money"></canvas>
       <p style="font-size:13px;color:#8a7a68">Final ideal recipe: <b>${g.ideal.join(' / ')}</b> (dough / sauce / cheese / toppings).</p>
       <div class="buttons">
-        <button class="primary" id="end-again">Play again</button>
+        ${actions.again ? '<button class="primary" id="end-again">Play again</button>' : ''}
         <button id="end-log">Download match log</button>
         <button id="end-menu">Menu</button>
       </div>
     </div>`;
-  document.getElementById('end-again')!.onclick = actions.again;
+  if (actions.again) document.getElementById('end-again')!.onclick = actions.again;
   document.getElementById('end-menu')!.onclick = actions.menu;
   document.getElementById('end-log')!.onclick = () => {
-    const blob = new Blob([JSON.stringify(s.telemetry())], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(actions.log())], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `bored-of-pizza-${g.cfg.seed}-${Date.now()}.json`;
@@ -89,16 +100,16 @@ function fmt(t: number) {
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 }
 
-type Snap = Session['game']['snapshots'][number];
+type Snap = EndData['snapshots'][number];
 
 function drawChart(
   canvas: HTMLCanvasElement,
-  s: Session,
+  s: EndData,
   value: (sn: Snap, p: number) => number,
   gridStep: number,
   prefix: string,
 ) {
-  const g = s.game;
+  const g = s;
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
