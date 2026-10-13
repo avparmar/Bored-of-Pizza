@@ -12,6 +12,8 @@ const ENDS: [string, string][] = [
   ['light cheese', 'extra cheese'],
   ['more meat', 'more veggies'],
 ];
+/** Compact low ↔ high labels shown under each ingredient name. */
+const SHORT_ENDS = ['thin ↔ thick', 'light ↔ heavy', 'light ↔ extra', 'meat ↔ veggie'];
 const NAMES = INGREDIENTS.map((n) => n[0].toUpperCase() + n.slice(1));
 /** [raise, lower] key per ingredient. */
 const KEYS: [string, string][] = [
@@ -169,7 +171,7 @@ function buildRecipeRows() {
     const row = document.createElement('div');
     row.className = 'recipe-row';
     row.innerHTML = `
-      <span class="name">${name} <kbd class="keys">${KEYS[i][0].toUpperCase()}/${KEYS[i][1].toUpperCase()}</kbd></span>
+      <span class="name">${name}<small class="range">${SHORT_ENDS[i]}</small><kbd class="keys">${KEYS[i][0].toUpperCase()}/${KEYS[i][1].toUpperCase()}</kbd></span>
       <div class="stepper">
         <button data-d="-5">−5</button><button data-d="-1">−1</button>
         <span class="val" id="val-${i}"></span>
@@ -177,10 +179,10 @@ function buildRecipeRows() {
         <span class="now" id="now-${i}"></span>
       </div>
       <div class="track-wrap">
-        <input type="range" min="1" max="${scale}" step="1" id="rng-${i}" />
+        <input type="range" min="1" max="${scale}" step="1" id="rng-${i}" title="${ENDS[i][0]} ↔ ${ENDS[i][1]}" />
         <div class="markers" id="mk-${i}"></div>
       </div>
-      <div class="ends"><span>${ENDS[i][0]}</span><span>${ENDS[i][1]}</span></div>`;
+`;
     rows.appendChild(row);
     row.querySelectorAll<HTMLButtonElement>('button[data-d]').forEach((b) => {
       b.onclick = () => setDraft(i, draft[i] + Number(b.dataset.d));
@@ -223,15 +225,21 @@ function refreshRecipe() {
       if (p === session!.human) return;
       byValue.set(r[i], [...(byValue.get(r[i]) ?? []), p]);
     });
+    // Labels for values close together alternate between two rows so they stay readable.
+    let prevV = -99;
+    let prevRow = 1;
     $(`mk-${i}`).innerHTML = hidden
       ? ''
       : [...byValue]
-          .map(
-            ([v, ps]) =>
-              `<span class="mk" title="${ps.map((p) => SHOP_NAMES[p]).join(', ')}: ${v}" style="left:${((v - 1) / (scale - 1)) * 100}%">${ps
-                .map((p) => `<b style="background:${SHOP_COLORS[p]}"></b>`)
-                .join('')}<i>${v}</i></span>`,
-          )
+          .sort((x, y) => x[0] - y[0])
+          .map(([v, ps]) => {
+            const row = v - prevV <= 2 && prevRow === 0 ? 1 : 0;
+            prevV = v;
+            prevRow = row;
+            return `<span class="mk${row ? ' low' : ''}" title="${ps.map((p) => SHOP_NAMES[p]).join(', ')}: ${v}" style="left:${((v - 1) / (scale - 1)) * 100}%">${ps
+              .map((p) => `<b style="background:${SHOP_COLORS[p]}"></b>`)
+              .join('')}<i>${v}</i></span>`;
+          })
           .join('');
   }
   $<HTMLButtonElement>('btn-apply').disabled = !dirty;

@@ -24,6 +24,26 @@
         </div>
       </header>
 
+      <aside id="left" class="side">
+        <section class="panel" id="board-panel">
+          <h2>Recipes <span class="hint">▲▼ = vs yours</span></h2>
+          <table id="board"></table>
+        </section>
+
+        <section class="panel" id="leaderboard-panel">
+          <h2>Leaderboard</h2>
+          <ol id="leaderboard"></ol>
+        </section>
+
+        <section class="panel" id="intel-panel">
+          <h2>Intel history <span id="intel-rate"></span></h2>
+          <details id="intel-history-wrap" open>
+            <summary>History (<span id="intel-count">0</span>)</summary>
+            <ol id="intel-history"></ol>
+          </details>
+        </section>
+      </aside>
+
       <main id="court-wrap">
         <div id="canvas-box">
           <div id="pregame" class="hidden">
@@ -39,17 +59,7 @@
         </div>
       </main>
 
-      <aside id="sidebar">
-        <section class="panel" id="board-panel">
-          <h2>Recipes <span class="hint">▲▼ = vs yours</span></h2>
-          <table id="board"></table>
-        </section>
-
-        <section class="panel" id="leaderboard-panel">
-          <h2>Leaderboard</h2>
-          <ol id="leaderboard"></ol>
-        </section>
-
+      <aside id="right" class="side">
         <section class="panel" id="recipe-panel">
           <h2>Your recipe <span id="recipe-status"></span></h2>
           <div id="tip-meter"></div>
@@ -60,15 +70,9 @@
             <button id="btn-reset" disabled>Reset <kbd>Esc</kbd></button>
           </div>
         </section>
-
-        <section class="panel" id="intel-panel">
-          <h2>Intel history <span id="intel-rate"></span></h2>
-          <details id="intel-history-wrap" open>
-            <summary>History (<span id="intel-count">0</span>)</summary>
-            <ol id="intel-history"></ol>
-          </details>
-        </section>
       </aside>
+
+
     </div>
 
     <div id="debug" class="hidden">
