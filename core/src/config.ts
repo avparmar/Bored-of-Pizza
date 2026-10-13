@@ -86,6 +86,11 @@ export interface Config {
   trendShiftIngredients: number;
   /** Trend shift size range, as fraction of scale. */
   trendShiftSize: [number, number];
+  /**
+   * What the trend-shift headline reveals: every ingredient that shifted ('all'), just one of
+   * them ('one', can mislead), or nothing but the fact that tastes moved ('none').
+   */
+  headlineNames: 'all' | 'one' | 'none';
   /** 0 = shifts happen instantly; otherwise the ideal walks to its new value over this long. */
   trendShiftRampSec: number;
 
@@ -142,6 +147,7 @@ export const defaultConfig: Config = {
   trendShiftIngredients: 2,
   trendShiftSize: [0.2, 0.4],
   trendShiftRampSec: 0,
+  headlineNames: 'all',
 
   retoolSecPerPoint: 0,
   retoolCostPerPoint: 0,

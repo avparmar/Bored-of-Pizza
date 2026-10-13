@@ -316,9 +316,11 @@ export class Game {
         this.ideal[i] = target;
       }
     }
-    this.headlines.push({ t: this.t, ingredient: picks[0] });
+    const named =
+      this.cfg.headlineNames === 'all' ? [...picks].sort() : this.cfg.headlineNames === 'one' ? [picks[0]] : [];
+    this.headlines.push({ t: this.t, ingredients: named });
     this.shiftTimes.push(this.t);
-    this.emit('all', { type: 'headline', t: this.t, ingredient: picks[0] });
+    this.emit('all', { type: 'headline', t: this.t, ingredients: named });
   }
 
   // ---------------------------------------------------------------- customers

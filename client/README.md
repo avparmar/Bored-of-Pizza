@@ -7,8 +7,11 @@ npm install        # from the repo root
 npm run dev        # then open the URL it prints (usually http://localhost:5173)
 ```
 
-- **Recipe:** adjust with the buttons or sliders, then **Apply** (Enter). Esc resets the draft.
-- **Blind pick:** 20s to set an opening recipe while rivals' are hidden (Ready or R to skip).
+- **Recipe:** adjust with the buttons, sliders or keys, then **Apply** (Enter). Esc resets the
+  draft. Keys: **Q/A** dough, **W/S** sauce, **E/D** cheese, **R/F** toppings (hold Shift for ±5);
+  **1/2/3** copy a rival's recipe into your draft. Rivals' current values show as coloured ticks
+  under each slider.
+- **Blind pick:** 20s to set an opening recipe while rivals' are hidden (Ready or Space to skip).
 - **Waiters:** click one of *your* customers and a waiter follows them to their table; click any
   table to send a waiter there (if all are busy, one heading to an empty table is re-sent).
   Right-click a waiter, or a table one is headed to, to call it home.

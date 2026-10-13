@@ -28,7 +28,7 @@
         <div id="canvas-box">
           <div id="pregame" class="hidden">
             <span>🔒 <b>Blind pick</b>: set your opening recipe. Rivals' recipes stay hidden until doors open in <b id="pregame-left">20</b>s.</span>
-            <button id="btn-ready" class="primary">Ready</button>
+            <button id="btn-ready" class="primary">Ready <kbd>Space</kbd></button>
           </div>
           <div id="trend-banner" class="hidden"></div>
           <div id="nudge" class="hidden"></div>
@@ -99,6 +99,13 @@
         <input id="dbg-ramp" type="number" step="5" min="0" value="0" /></div>
       </label>
       <label class="row"><input id="dbg-autofollow" type="checkbox" /> Auto-follow (waiters follow your customers)</label>
+      <label>Trend headlines name
+        <select id="dbg-headline">
+          <option value="all">every ingredient that shifted</option>
+          <option value="none">nothing (just that tastes moved)</option>
+          <option value="one">only one of them (old)</option>
+        </select>
+      </label>
       <label class="row"><input id="dbg-bag" type="checkbox" checked /> Report ingredients rotate (every 4 reports cover all 4)</label>
       <label class="row"><input id="dbg-verdict" type="checkbox" /> Reports include the diner's verdict 👍😐👎</label>
       <label>Seconds between arrivals <input id="dbg-arrival" type="number" step="0.1" min="0.3" value="1.2" /></label>

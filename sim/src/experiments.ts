@@ -23,7 +23,15 @@ interface Experiment {
 // ------------------------------------------------------------------ round 1
 
 /** Round 1 ran before these were changed; pin them so the suite stays reproducible. */
-const R1: Partial<Config> = { shareP: 2, eatSec: 7, customerWalkIn: false, waiterAutoReturn: false, pregameSec: 0 };
+const R1: Partial<Config> = {
+  shareP: 2,
+  eatSec: 7,
+  customerWalkIn: false,
+  waiterAutoReturn: false,
+  pregameSec: 0,
+  headlineNames: 'one',
+  reportBag: false,
+};
 const MIXED = ['searcher', 'hybrid', 'copycat', 'static'];
 
 const round1: Experiment[] = [
@@ -121,7 +129,13 @@ const SMART = ['analyst', 'hybrid', 'hawk', 'searcher'];
  * Customers now also leave from the shop door rather than its centre, so reruns differ slightly
  * from the committed round2.md (reports arrive ~2s sooner).
  */
-const R2: Partial<Config> = { customerWalkIn: false, waiterAutoReturn: false, pregameSec: 0 };
+const R2: Partial<Config> = {
+  customerWalkIn: false,
+  waiterAutoReturn: false,
+  pregameSec: 0,
+  headlineNames: 'one',
+  reportBag: false,
+};
 
 const round2: Experiment[] = [
   {
@@ -253,7 +267,14 @@ const round3: Experiment[] = [
 ];
 
 /** Round 3 ran before the flow changes in round 4. */
-const R3: Partial<Config> = { eatSec: 4.5, arrivalMeanSec: 1.5, waiterSpeed: 3, shareFloor: 0 };
+const R3: Partial<Config> = {
+  eatSec: 4.5,
+  arrivalMeanSec: 1.5,
+  waiterSpeed: 3,
+  shareFloor: 0,
+  headlineNames: 'one',
+  reportBag: false,
+};
 for (const e of round3) e.base = R3;
 
 // ------------------------------------------------------------------ round 4

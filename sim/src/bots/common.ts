@@ -58,10 +58,13 @@ export class Belief {
     }
     for (; this.headlinesSeen < obs.headlines.length; this.headlinesSeen++) {
       const h = obs.headlines[this.headlinesSeen];
-      this.set(h.ingredient, 1, cfg.scale);
-      // Another, unnamed ingredient also shifted: loosen everything a bit.
-      const extra = Math.round(cfg.scale * 0.15);
-      for (let i = 0; i < 4; i++) this.set(i, this.lo[i] - extra, this.hi[i] + extra);
+      // Named ingredients: start over. If the headline might not name everything that moved,
+      // loosen the rest a bit too.
+      for (const i of h.ingredients) this.set(i, 1, cfg.scale);
+      if (cfg.headlineNames !== 'all') {
+        const extra = Math.round(cfg.scale * 0.15);
+        for (let i = 0; i < 4; i++) this.set(i, this.lo[i] - extra, this.hi[i] + extra);
+      }
     }
     for (; this.reportsSeen < obs.reports.length; this.reportsSeen++) {
       const r = obs.reports[this.reportsSeen];

@@ -38,8 +38,8 @@ export interface Report {
 
 export interface Headline {
   t: number;
-  /** One of the ingredients that just shifted (no direction given). */
-  ingredient: number;
+  /** Ingredients named as shifting (no direction given). Empty when headlines name nothing. */
+  ingredients: number[];
 }
 
 export interface TableView {
@@ -95,7 +95,7 @@ export type GameEvent =
   | { type: 'tip'; t: number; restaurant: number; amount: number; table: number | null }
   /** Private to the recipient. */
   | { type: 'report'; t: number; report: Report }
-  | { type: 'headline'; t: number; ingredient: number }
+  | { type: 'headline'; t: number; ingredients: number[] }
   | { type: 'recipe'; t: number; restaurant: number; recipe: Recipe }
   /** Your waiter arrived at a table someone else was already holding. */
   | { type: 'blocked'; t: number; table: number };

@@ -13,6 +13,13 @@ const ENDS: [string, string][] = [
   ['more meat', 'more veggies'],
 ];
 const NAMES = INGREDIENTS.map((n) => n[0].toUpperCase() + n.slice(1));
+/** [raise, lower] key per ingredient. */
+const KEYS: [string, string][] = [
+  ['q', 'a'],
+  ['w', 's'],
+  ['e', 'd'],
+  ['r', 'f'],
+];
 const SEAT_OPTIONS: Seat[] = ['human', ...(Object.keys(STRATEGIES) as Seat[])];
 
 // ------------------------------------------------------------------ settings
@@ -32,6 +39,7 @@ const settings = {
   autoFollow: false,
   verdict: false,
   bag: true,
+  headlineNames: 'all' as 'all' | 'one' | 'none',
 };
 
 // ------------------------------------------------------------------ state
@@ -49,7 +57,7 @@ let myTips: { t: number; amount: number }[] = [];
 let publicHist: { t: number; money: number[]; served: number[] }[] = [];
 let nudgeShown = false;
 let recipeChangedAt: number[] = [];
-let trendFlash: { ingredient: number; until: number } | null = null;
+let trendFlash: { ingredients: number[]; until: number } | null = null;
 let bannerTimer: number | undefined;
 
 // ------------------------------------------------------------------ start / restart
@@ -71,6 +79,7 @@ function start(seats: Seat[]) {
       autoFollow: settings.autoFollow,
       reportVerdict: settings.verdict,
       reportBag: settings.bag,
+      headlineNames: settings.headlineNames,
     },
   });
   if (session.human === null) session.ready(); // spectators skip the blind pick
@@ -112,6 +121,7 @@ function newSeed() {
   $<HTMLInputElement>('dbg-autofollow').checked = settings.autoFollow;
   $<HTMLInputElement>('dbg-verdict').checked = settings.verdict;
   $<HTMLInputElement>('dbg-bag').checked = settings.bag;
+  $<HTMLSelectElement>('dbg-headline').value = settings.headlineNames;
 }
 
 function showStart() {
@@ -122,7 +132,9 @@ function showStart() {
       Pizzas sell at cost, so you earn only from <b>tips</b>, and customers tip more the closer your
       pizza is to today's taste. Nobody knows exactly what that taste is, and it keeps changing.</p>
       <ul>
-        <li><b>Tune your recipe</b> on the right, then press <b>Apply</b>. Every shop's recipe is public.</li>
+        <li><b>Tune your recipe</b> on the right, then press <b>Apply</b> (Enter). Every shop's recipe is public.
+        Keys: <b>Q/A</b> dough, <b>W/S</b> sauce, <b>E/D</b> cheese, <b>R/F</b> toppings (Shift = ±5);
+        <b>1/2/3</b> copy a rival's recipe into your draft.</li>
         <li>First, a 20-second <b>blind pick</b>: choose your opening recipe while everyone else's is hidden.</li>
         <li><b>Click one of your customers</b> (in line or carrying your pizza) and a waiter follows them to
         their table. Or <b>click any table</b> to send a waiter there, including to spy on rivals' diners.
@@ -157,14 +169,17 @@ function buildRecipeRows() {
     const row = document.createElement('div');
     row.className = 'recipe-row';
     row.innerHTML = `
-      <span class="name">${name}</span>
+      <span class="name">${name} <kbd class="keys">${KEYS[i][0].toUpperCase()}/${KEYS[i][1].toUpperCase()}</kbd></span>
       <div class="stepper">
         <button data-d="-5">−5</button><button data-d="-1">−1</button>
         <span class="val" id="val-${i}"></span>
         <button data-d="1">+1</button><button data-d="5">+5</button>
         <span class="now" id="now-${i}"></span>
       </div>
-      <input type="range" min="1" max="${scale}" step="1" id="rng-${i}" />
+      <div class="track-wrap">
+        <input type="range" min="1" max="${scale}" step="1" id="rng-${i}" />
+        <div class="markers" id="mk-${i}"></div>
+      </div>
       <div class="ends"><span>${ENDS[i][0]}</span><span>${ENDS[i][1]}</span></div>`;
     rows.appendChild(row);
     row.querySelectorAll<HTMLButtonElement>('button[data-d]').forEach((b) => {
@@ -196,6 +211,28 @@ function refreshRecipe() {
     $(`now-${i}`).textContent = draft[i] !== cur[i] ? `now ${cur[i]}` : '';
     $<HTMLInputElement>(`rng-${i}`).value = String(draft[i]);
     if (draft[i] !== cur[i]) dirty = true;
+  }
+  // Rivals' current values as coloured ticks on each slider.
+  const obs = session.game.observe(session.human);
+  const scale = session.game.cfg.scale;
+  for (let i = 0; i < 4; i++) {
+    const hidden = obs.phase === 'pregame';
+    // One tick per value; rivals sharing a value stack their colours side by side.
+    const byValue = new Map<number, number[]>();
+    obs.recipes.forEach((r, p) => {
+      if (p === session!.human) return;
+      byValue.set(r[i], [...(byValue.get(r[i]) ?? []), p]);
+    });
+    $(`mk-${i}`).innerHTML = hidden
+      ? ''
+      : [...byValue]
+          .map(
+            ([v, ps]) =>
+              `<span class="mk" title="${ps.map((p) => SHOP_NAMES[p]).join(', ')}: ${v}" style="left:${((v - 1) / (scale - 1)) * 100}%">${ps
+                .map((p) => `<b style="background:${SHOP_COLORS[p]}"></b>`)
+                .join('')}<i>${v}</i></span>`,
+          )
+          .join('');
   }
   $<HTMLButtonElement>('btn-apply').disabled = !dirty;
   $<HTMLButtonElement>('btn-reset').disabled = !dirty;
@@ -271,7 +308,7 @@ function refreshRecipeBoard(obs: Observation) {
   const hidden = obs.phase === 'pregame';
   const order = [me, ...[0, 1, 2, 3].filter((p) => p !== me && p < obs.recipes.length)];
   const head = `<tr><th></th>${SHORT.map(
-    (x, i) => `<th class="${trendFlash && trendFlash.ingredient === i && obs.t < trendFlash.until ? 'flash' : ''}">${x}</th>`,
+    (x, i) => `<th class="${trendFlash && trendFlash.ingredients.includes(i) && obs.t < trendFlash.until ? 'flash' : ''}">${x}</th>`,
   ).join('')}</tr>`;
   const rows = order
     .map((p) => {
@@ -378,13 +415,16 @@ function handleEvents(evs: GameEvent[], obs: Observation) {
       const color = e.amount >= 6 ? '#1B6E2F' : e.amount >= 3 ? '#A9820A' : '#C62828';
       renderer.popup(`+$${e.amount.toFixed(2)}`, { x: at.x, y: at.y - 0.4 }, color, obs.t, 1.8, 0.75);
     } else if (e.type === 'headline') {
-      const name = INGREDIENTS[e.ingredient].toUpperCase();
+      const names = e.ingredients.map((i) => INGREDIENTS[i].toUpperCase());
+      const name = names.length ? names.join(' & ') : 'TASTES ARE CHANGING';
       const h = $('headline');
-      h.textContent = `📰 TREND ALERT! Everyone's suddenly talking about ${name}…`;
+      h.textContent = names.length
+        ? `📰 TREND ALERT! Everyone's suddenly talking about ${name}…`
+        : `📰 TREND ALERT! Something new is in fashion… but what?`;
       h.classList.remove('flash');
       void h.offsetWidth;
       h.classList.add('flash');
-      trendFlash = { ingredient: e.ingredient, until: obs.t + 20 };
+      trendFlash = { ingredients: e.ingredients, until: obs.t + 20 };
       const b = $('trend-banner');
       b.innerHTML = `📰 TREND ALERT: ${name}!<small>Tastes just shifted. Your recipe may be way off now.</small>`;
       b.classList.remove('hidden');
@@ -494,9 +534,32 @@ $('btn-ready').onclick = () => session?.ready();
 
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement && e.target.type !== 'range') return;
+  if (e.target instanceof HTMLSelectElement) return;
+  const k = e.key.toLowerCase();
+  const up = KEYS.findIndex(([u]) => u === k);
+  const down = KEYS.findIndex(([, d]) => d === k);
+  if (session && session.human !== null && (up >= 0 || down >= 0) && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault();
+    const step = e.shiftKey ? 5 : 1;
+    if (up >= 0) setDraft(up, draft[up] + step);
+    else setDraft(down, draft[down] - step);
+    return;
+  }
+  if (session && session.human !== null && ['1', '2', '3'].includes(e.key) && !e.shiftKey) {
+    // Copy a rival's recipe into the draft (not applied until Enter).
+    const rivals = [0, 1, 2, 3].filter((p) => p !== session!.human);
+    const p = rivals[Number(e.key) - 1];
+    if (p !== undefined && session.game.phase === 'open') {
+      draft = [...session.game.recipes[p]] as Recipe;
+      refreshRecipe();
+    }
+    return;
+  }
   if (e.key === 'Enter') applyDraft();
-  else if ((e.key === 'r' || e.key === 'R') && session?.game.phase === 'pregame') session.ready();
-  else if (e.key === 'Escape') resetDraft();
+  else if (e.key === ' ' && session?.game.phase === 'pregame') {
+    e.preventDefault();
+    session.ready();
+  } else if (e.key === 'Escape') resetDraft();
   else if (e.key === 'p' || e.key === 'P') togglePause();
   else if (e.key === '`') toggleDebug();
 });
@@ -537,6 +600,7 @@ function toggleDebug() {
   $<HTMLInputElement>('dbg-autofollow').checked = settings.autoFollow;
   $<HTMLInputElement>('dbg-verdict').checked = settings.verdict;
   $<HTMLInputElement>('dbg-bag').checked = settings.bag;
+  $<HTMLSelectElement>('dbg-headline').value = settings.headlineNames;
 }
 $('btn-debug').onclick = toggleDebug;
 $('dbg-close').onclick = () => $('debug').classList.add('hidden');
@@ -553,6 +617,7 @@ $('dbg-restart').onclick = () => {
   settings.autoFollow = $<HTMLInputElement>('dbg-autofollow').checked;
   settings.verdict = $<HTMLInputElement>('dbg-verdict').checked;
   settings.bag = $<HTMLInputElement>('dbg-bag').checked;
+  settings.headlineNames = $<HTMLSelectElement>('dbg-headline').value as 'all' | 'one' | 'none';
   settings.seed = Number($<HTMLInputElement>('dbg-seed').value) || 1;
   settings.skill = $<HTMLSelectElement>('dbg-skill').value as BotSkill;
   const num = (id: string, d: number) => {
