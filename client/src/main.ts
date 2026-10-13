@@ -132,7 +132,7 @@ function showStart() {
       Pizzas sell at cost, so you earn only from <b>tips</b>, and customers tip more the closer your
       pizza is to today's taste. Nobody knows exactly what that taste is, and it keeps changing.</p>
       <ul>
-        <li><b>Tune your recipe</b> on the right, then press <b>Apply</b> (Enter). Every shop's recipe is public.
+        <li><b>Tune your recipe</b> on the right, then press <b>Apply</b> (Space or Enter). Every shop's recipe is public.
         Keys: <b>Q/A</b> dough, <b>W/S</b> sauce, <b>E/D</b> cheese, <b>R/F</b> toppings (Shift = ±5);
         <b>1/2/3</b> copy a rival's recipe into your draft.</li>
         <li>First, a 20-second <b>blind pick</b>: choose your opening recipe while everyone else's is hidden.</li>
@@ -556,9 +556,15 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === 'Enter') applyDraft();
-  else if (e.key === ' ' && session?.game.phase === 'pregame') {
+  else if (e.key === ' ') {
+    // Space applies the draft (it sits right under the ingredient keys). During the blind
+    // pick, Space with nothing left to apply means Ready.
     e.preventDefault();
-    session.ready();
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    if (!session || session.human === null) return;
+    const dirty = draft.some((v, i) => v !== currentRecipe()[i]);
+    if (dirty) applyDraft();
+    else if (session.game.phase === 'pregame') session.ready();
   } else if (e.key === 'Escape') resetDraft();
   else if (e.key === 'p' || e.key === 'P') togglePause();
   else if (e.key === '`') toggleDebug();
