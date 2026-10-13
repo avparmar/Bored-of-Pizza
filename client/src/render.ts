@@ -10,6 +10,8 @@ interface Popup {
   at: Vec;
   born: number;
   color: string;
+  life: number;
+  size: number;
 }
 
 const MARGIN = 2; // world units around the court (entrances sit just outside)
@@ -24,6 +26,8 @@ export class CourtRenderer {
   hoverCustomer: number | null = null;
   /** Where each customer was last drawn (world units), for click hit-testing. */
   private customerPos = new Map<number, { pos: Vec; restaurant: number }>();
+  /** Where each of your waiters was last drawn (world units), for right-click recall. */
+  private myWaiterPos = new Map<number, Vec>();
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
@@ -86,8 +90,15 @@ export class CourtRenderer {
     return best;
   }
 
-  popup(text: string, at: Vec, color: string, now: number) {
-    this.popups.push({ text, at, born: now, color });
+  popup(text: string, at: Vec, color: string, now: number, life = 1.6, size = 0.7) {
+    this.popups.push({ text, at, born: now, color, life, size });
+  }
+
+  /** Index of your waiter under the cursor. */
+  waiterAt(sx: number, sy: number): number | null {
+    const w = this.toWorld(sx, sy);
+    for (const [idx, p] of this.myWaiterPos) if (Math.hypot(p.x - w.x, p.y - w.y) < 0.7) return idx;
+    return null;
   }
 
   draw(obs: Observation, t: number, me: number | null, ideal: number[] | null) {
@@ -115,43 +126,37 @@ export class CourtRenderer {
       ctx.fillRect(p.x - k * 1.2, p.y - k * 0.6, k * 2.4, k * 1.2);
     }
 
-    // Shops
+    // Shops, with their public recipe printed on the storefront.
     obs.restaurantPos.forEach((rp, r) => {
-      const a = this.toScreen({ x: rp.x - 1.6, y: rp.y - 1.6 });
+      const half = 1.9;
+      const a = this.toScreen({ x: rp.x - half, y: rp.y - half });
       ctx.fillStyle = SHOP_COLORS[r];
-      ctx.strokeStyle = SHOP_DARK[r];
+      ctx.strokeStyle = r === me ? '#111' : SHOP_DARK[r];
       ctx.lineWidth = r === me ? 5 : 3;
       ctx.beginPath();
-      ctx.roundRect(a.x, a.y, k * 3.2, k * 3.2, k * 0.4);
+      ctx.roundRect(a.x, a.y, k * half * 2, k * half * 2, k * 0.4);
       ctx.fill();
       ctx.stroke();
       const c = this.toScreen(rp);
-      ctx.fillStyle = r === 2 ? '#3A2A00' : '#fff';
-      ctx.font = `bold ${Math.round(k * 0.9)}px system-ui, sans-serif`;
+      const ink = r === 2 ? '#3A2A00' : '#fff';
+      ctx.fillStyle = ink;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(r === me ? 'YOU' : SHOP_NAMES[r][0], c.x, c.y);
+      ctx.font = `800 ${Math.round(k * 0.6)}px system-ui, sans-serif`;
+      ctx.fillText(r === me ? 'YOU' : SHOP_NAMES[r].toUpperCase(), c.x, c.y - k * 1.15);
 
-      // Public recipe label, toward the middle of the court.
-      const rec = obs.recipes[r];
       const hidden = obs.phase === 'pregame' && r !== me;
-      const label = hidden ? 'D? S? C? T?' : rec.map((v, i) => `${SHORT[i]}${v}`).join(' ');
-      // Sits in the margin outside the court, beside the shop, so nothing walks over it.
-      const lp = this.toScreen({
-        x: rp.x + (rp.x < S / 2 ? 5.6 : -5.6),
-        y: rp.y < S / 2 ? -1.0 : S + 1.0,
-      });
-      ctx.font = `700 ${Math.round(k * 0.6)}px ui-monospace, monospace`;
-      const wdt = ctx.measureText(label).width + 10;
-      ctx.fillStyle = '#fff';
-      ctx.strokeStyle = SHOP_COLORS[r];
-      ctx.lineWidth = 2;
+      const rec = obs.recipes[r];
+      const cell = (i: number) => (hidden ? `${SHORT[i]}?` : `${SHORT[i]}${rec[i]}`);
+      // Two rows on a light plate so the numbers read at a glance.
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
       ctx.beginPath();
-      ctx.roundRect(lp.x - wdt / 2, lp.y - k * 0.42, wdt, k * 0.84, 4);
+      ctx.roundRect(c.x - k * 1.65, c.y - k * 0.72, k * 3.3, k * 1.95, k * 0.25);
       ctx.fill();
-      ctx.stroke();
       ctx.fillStyle = SHOP_DARK[r];
-      ctx.fillText(label, lp.x, lp.y);
+      ctx.font = `800 ${Math.round(k * 0.72)}px ui-monospace, monospace`;
+      ctx.fillText(`${cell(0)} ${cell(1)}`, c.x, c.y - k * 0.22);
+      ctx.fillText(`${cell(2)} ${cell(3)}`, c.x, c.y + k * 0.7);
 
       // Door mat
       const d = this.toScreen(obs.doorPos[r]);
@@ -173,6 +178,24 @@ export class CourtRenderer {
       ctx.arc(p.x, p.y, k * 0.75, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
+    }
+
+    // Where each customer carrying a pizza is headed (public: you can watch them walk).
+    for (const c of obs.customers) {
+      if (c.state !== 'walking' || c.table === null) continue;
+      const a = this.toScreen(legPos(c, t));
+      const b = this.toScreen(obs.tables[c.table].pos);
+      ctx.strokeStyle = SHOP_COLORS[c.restaurant];
+      ctx.globalAlpha = 0.45;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, k * 0.85, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
     }
 
     // Customers
@@ -243,6 +266,7 @@ export class CourtRenderer {
     }
 
     // Waiters
+    this.myWaiterPos.clear();
     for (const w of obs.waiters) {
       const pos = legPos(w, t);
       const p = this.toScreen(pos);
@@ -266,6 +290,7 @@ export class CourtRenderer {
         const dy = door.y < S / 2 ? 1 : -1;
         drawAt = { x: door.x + dx * (1.0 + 0.95 * w.idx), y: door.y - dy * 0.3 };
       }
+      if (mine) this.myWaiterPos.set(w.idx, drawAt);
       const q = this.toScreen(drawAt);
       ctx.fillStyle = SHOP_COLORS[w.owner];
       ctx.strokeStyle = mine ? '#111' : '#fff';
@@ -280,12 +305,12 @@ export class CourtRenderer {
     }
 
     // Popups (tips, blocked)
-    this.popups = this.popups.filter((pp) => t - pp.born < 1.6);
+    this.popups = this.popups.filter((pp) => t - pp.born < pp.life);
     for (const pp of this.popups) {
       const age = t - pp.born;
-      const p = this.toScreen({ x: pp.at.x, y: pp.at.y - age * 1.2 });
-      ctx.globalAlpha = Math.max(0, 1 - age / 1.6);
-      ctx.font = `bold ${Math.round(k * 0.7)}px system-ui, sans-serif`;
+      const p = this.toScreen({ x: pp.at.x, y: pp.at.y - age * (1.9 / pp.life) });
+      ctx.globalAlpha = Math.max(0, 1 - Math.max(0, age - pp.life * 0.5) / (pp.life * 0.5));
+      ctx.font = `bold ${Math.round(k * pp.size)}px system-ui, sans-serif`;
       ctx.lineWidth = 3;
       ctx.strokeStyle = '#fff';
       ctx.strokeText(pp.text, p.x, p.y);

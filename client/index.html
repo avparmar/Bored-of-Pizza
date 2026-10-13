@@ -25,14 +25,26 @@
       </header>
 
       <main id="court-wrap">
-        <div id="pregame" class="hidden">
-          <span>🔒 <b>Blind pick</b>: set your opening recipe. Rivals' recipes stay hidden until doors open in <b id="pregame-left">20</b>s.</span>
-          <button id="btn-ready" class="primary">Ready</button>
+        <div id="canvas-box">
+          <div id="pregame" class="hidden">
+            <span>🔒 <b>Blind pick</b>: set your opening recipe. Rivals' recipes stay hidden until doors open in <b id="pregame-left">20</b>s.</span>
+            <button id="btn-ready" class="primary">Ready</button>
+          </div>
+          <div id="trend-banner" class="hidden"></div>
+          <div id="nudge" class="hidden"></div>
+          <canvas id="court"></canvas>
         </div>
-        <canvas id="court"></canvas>
+        <div id="intel-strip">
+          <div id="intel-latest"></div>
+        </div>
       </main>
 
       <aside id="sidebar">
+        <section class="panel" id="board-panel">
+          <h2>Recipes <span class="hint">▲▼ = vs yours</span></h2>
+          <table id="board"></table>
+        </section>
+
         <section class="panel" id="leaderboard-panel">
           <h2>Leaderboard</h2>
           <ol id="leaderboard"></ol>
@@ -40,6 +52,7 @@
 
         <section class="panel" id="recipe-panel">
           <h2>Your recipe <span id="recipe-status"></span></h2>
+          <div id="tip-meter"></div>
           <div id="tipoff"></div>
           <div id="recipe-rows"></div>
           <div class="recipe-actions">
@@ -49,9 +62,8 @@
         </section>
 
         <section class="panel" id="intel-panel">
-          <h2>Intel <span id="intel-rate"></span></h2>
-          <div id="intel-latest"></div>
-          <details id="intel-history-wrap">
+          <h2>Intel history <span id="intel-rate"></span></h2>
+          <details id="intel-history-wrap" open>
             <summary>History (<span id="intel-count">0</span>)</summary>
             <ol id="intel-history"></ol>
           </details>
@@ -79,14 +91,16 @@
       </label>
       <label>Tip steepness k (lower = gentler) <input id="dbg-tipk" type="number" step="0.01" min="0.05" value="0.35" /></label>
       <label>Customer share floor / cap
-        <div class="row"><input id="dbg-floor" type="number" step="0.05" min="0" max="0.25" value="0" />
+        <div class="row"><input id="dbg-floor" type="number" step="0.05" min="0" max="0.25" value="0.1" />
         <input id="dbg-cap" type="number" step="0.05" min="0.25" max="1" value="1" /></div>
       </label>
       <label>Trend shift: ingredients / ramp seconds
         <div class="row"><input id="dbg-shift-n" type="number" step="1" min="1" max="4" value="2" />
         <input id="dbg-ramp" type="number" step="5" min="0" value="0" /></div>
       </label>
-      <label>Seconds between arrivals <input id="dbg-arrival" type="number" step="0.1" min="0.3" value="1.5" /></label>
+      <label class="row"><input id="dbg-autofollow" type="checkbox" /> Auto-follow (waiters follow your customers)</label>
+      <label class="row"><input id="dbg-verdict" type="checkbox" /> Reports include the diner's verdict 👍😐👎</label>
+      <label>Seconds between arrivals <input id="dbg-arrival" type="number" step="0.1" min="0.3" value="1.2" /></label>
       <label>Seed <input id="dbg-seed" type="number" value="1" /></label>
       <label class="row"><input id="dbg-reveal" type="checkbox" /> Reveal ideal recipe</label>
       <div class="row">

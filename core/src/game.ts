@@ -406,10 +406,24 @@ export class Game {
     }
     const tb = free[this.rng.weighted(free.map((f) => 1 / Math.pow(dist(door, f.pos), 2)))];
     tb.customer = c.id;
+    let covered = false;
     for (const w of this.waiters) {
       if (w.follow === c.id) {
         w.follow = null;
         this.assignWaiter(w, tb.id);
+        covered = true;
+      }
+    }
+    if (this.cfg.autoFollow && !covered) {
+      const mine = this.waiters.filter((w) => w.owner === c.restaurant);
+      if (!mine.some((w) => w.target === tb.id)) {
+        const free = mine.filter((w) => this.isFree(w));
+        if (free.length) {
+          const best = free.reduce((a, b) =>
+            dist(legPos(a, this.t), tb.pos) <= dist(legPos(b, this.t), tb.pos) ? a : b,
+          );
+          this.assignWaiter(best, tb.id);
+        }
       }
     }
     c.table = tb.id;
@@ -428,7 +442,13 @@ export class Game {
     const tip = cfg.tipBase * Math.exp(-cfg.tipK * d) * noise;
     this.money[c.restaurant] += tip;
     this.tipLog.push({ t: this.t, restaurant: c.restaurant, tip, distance: d });
-    this.emit(c.restaurant, { type: 'tip', t: this.t, restaurant: c.restaurant, amount: tip });
+    this.emit(c.restaurant, {
+      type: 'tip',
+      t: this.t,
+      restaurant: c.restaurant,
+      amount: tip,
+      table: c.table ?? null,
+    });
 
     const h = this.accHistory[c.restaurant];
     h.push({ t: this.t, acc: accuracy(c.recipe!, c.idealAtOrder!, cfg) });
@@ -466,6 +486,7 @@ export class Game {
     const showMag =
       direction !== 'right' &&
       (cfg.magnitude === 'all' || (cfg.magnitude === 'own' && to === c.restaurant));
+    const d = distance(c.recipe!, c.idealAtOrder!, cfg);
     const report: Report = {
       id: this.nextReportId++,
       to,
@@ -474,6 +495,8 @@ export class Game {
       ingredient: i,
       direction,
       magnitude: showMag ? magnitudeOf(value, idealV, cfg) : null,
+      verdict: cfg.reportVerdict ? (d <= 2 ? 'good' : d <= 5 ? 'ok' : 'bad') : null,
+      table: c.table ?? null,
       orderedAt: c.orderedAt!,
       deliveredAt: this.t,
       source,
@@ -572,6 +595,12 @@ export class Game {
         this.sendHome(best);
         best.follow = c.id;
       }
+    } else if (action.type === 'recallWaiter') {
+      const w = this.waiters.find((x) => x.owner === player && x.idx === action.idx);
+      if (w) {
+        w.follow = null;
+        this.sendHome(w);
+      }
     } else if (action.type === 'assignWaiter') {
       const w = this.waiters.find((x) => x.owner === player && x.idx === action.idx);
       if (w) this.assignWaiter(w, action.table);
@@ -580,7 +609,13 @@ export class Game {
       if (!tb) return;
       const mine = this.waiters.filter((w) => w.owner === player);
       if (mine.some((w) => w.target === action.table)) return;
-      const free = mine.filter((w) => this.isFree(w));
+      let free = mine.filter((w) => this.isFree(w));
+      if (free.length === 0) {
+        // All busy: re-send one whose table has nobody to listen to (never one mid-meal).
+        free = mine.filter(
+          (w) => w.follow === null && w.target !== null && this.tables[w.target].customer === null,
+        );
+      }
       if (free.length === 0) return;
       const best = free.reduce((a, b) =>
         dist(legPos(a, this.t), tb.pos) <= dist(legPos(b, this.t), tb.pos) ? a : b,

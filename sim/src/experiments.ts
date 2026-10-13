@@ -12,6 +12,8 @@ import { formatBatch, reachAfterSitDown, runBatch } from './runner.js';
 import type { BotSkill } from './bots/strategies.js';
 
 interface Experiment {
+  /** Settings pinned for every batch in this experiment (so old suites stay reproducible). */
+  base?: Partial<Config>;
   title: string;
   question: string;
   batches: { label: string; lineup: string[]; overrides?: Partial<Config>; skill?: BotSkill }[];
@@ -250,15 +252,43 @@ const round3: Experiment[] = [
   },
 ];
 
+/** Round 3 ran before the flow changes in round 4. */
+const R3: Partial<Config> = { eatSec: 4.5, arrivalMeanSec: 1.5, waiterSpeed: 3, shareFloor: 0 };
+for (const e of round3) e.base = R3;
+
+// ------------------------------------------------------------------ round 4
+
+const round4: Experiment[] = [
+  {
+    title: '1. Faster flow',
+    question:
+      'Old flow (eat 4.5s, a customer every 1.5s, waiter speed 3, no floor) vs new defaults (eat 6s, every 1.2s, waiter speed 4, 10% floor).',
+    batches: [
+      { label: 'old flow', lineup: R3_LINEUP, skill: H, overrides: R3 },
+      { label: 'new flow (defaults)', lineup: R3_LINEUP, skill: H },
+      { label: 'new flow, superhuman bots', lineup: R3_LINEUP, skill: 'superhuman' },
+    ],
+  },
+  {
+    title: '2. Gentler tips on the new flow',
+    question: 'Does k=0.25 still narrow the spread with the new flow?',
+    batches: [
+      { label: 'k=0.35 (current)', lineup: R3_LINEUP, skill: H },
+      { label: 'k=0.25', lineup: R3_LINEUP, skill: H, overrides: { tipK: 0.25 } },
+    ],
+  },
+];
+
 // ------------------------------------------------------------------ main
 
 const SUITES: Record<string, { title: string; experiments: Experiment[] }> = {
   round1: { title: 'Round 1: simple bots', experiments: round1 },
   round2: { title: 'Round 2: signed-off defaults and a smarter bot', experiments: round2 },
   round3: { title: 'Round 3: human-like bots, trend shifts vs penalty', experiments: round3 },
+  round4: { title: 'Round 4: faster flow', experiments: round4 },
 };
 
-const suiteName = process.argv[2] ?? 'round3';
+const suiteName = process.argv[2] ?? 'round4';
 const GAMES = Number(process.argv[3] ?? 200);
 const suite = SUITES[suiteName];
 if (!suite) {
@@ -291,7 +321,8 @@ for (const e of suite.experiments) {
   if (e.note) out.push(e.note());
   for (const b of e.batches) {
     const label = b.skill ? `${b.label} · ${b.skill} bots` : b.label;
-    out.push(formatBatch(runBatch(label, b.lineup, GAMES, b.overrides ?? {}, 1000, b.skill)));
+    const overrides = { ...(e.base ?? {}), ...(b.overrides ?? {}) };
+    out.push(formatBatch(runBatch(label, b.lineup, GAMES, overrides, 1000, b.skill)));
     process.stderr.write(`done: ${e.title} / ${b.label}\n`);
   }
 }

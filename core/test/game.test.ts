@@ -162,6 +162,43 @@ describe('Following a customer', () => {
   });
 });
 
+describe('Waiter controls', () => {
+  it('autoFollow sends a free waiter to each of your customers tables', () => {
+    const g = new Game(makeConfig({ seed: 12, autoFollow: true }));
+    let sent = 0;
+    while (g.t < 40) {
+      g.step();
+      sent += g.observe(0).myWaiters.filter((w) => w.target !== null).length > 0 ? 1 : 0;
+    }
+    expect(sent).toBeGreaterThan(0);
+    expect(g.reportLog.filter((r) => r.to === 0 && r.source === 'waiter').length).toBeGreaterThan(0);
+  });
+
+  it('recallWaiter sends a waiter home and clears its job', () => {
+    const g = new Game(makeConfig({ seed: 13 }));
+    g.act(0, { type: 'sendWaiter', table: 15 });
+    const w = g.observe(0).myWaiters.find((x) => x.target === 15)!;
+    g.act(0, { type: 'recallWaiter', idx: w.idx });
+    expect(g.observe(0).myWaiters.every((x) => x.target === null)).toBe(true);
+  });
+
+  it('when all waiters are busy, a click re-sends one heading to an empty table', () => {
+    const g = new Game(makeConfig({ seed: 14, arrivalMeanSec: 1e9 }));
+    g.act(0, { type: 'sendWaiter', table: 0 });
+    g.act(0, { type: 'sendWaiter', table: 1 });
+    g.act(0, { type: 'sendWaiter', table: 2 });
+    const targets = g.observe(0).myWaiters.map((x) => x.target).sort();
+    expect(targets).toContain(2);
+  });
+
+  it('reportVerdict adds the diners overall opinion', () => {
+    const g = new Game(makeConfig({ seed: 15, reportVerdict: true }));
+    while (g.t < 60) g.step();
+    expect(g.reportLog.length).toBeGreaterThan(0);
+    for (const r of g.reportLog) expect(['good', 'ok', 'bad']).toContain(r.verdict);
+  });
+});
+
 describe('Shares and shifts', () => {
   it('clampShares keeps every share within floor and cap', () => {
     const s = clampShares([100, 1, 1, 1], 0.1, 0.45);

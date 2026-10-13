@@ -12,6 +12,8 @@ export interface Vec {
 
 export type Direction = 'higher' | 'lower' | 'right';
 export type Magnitude = 'little' | 'lot' | 'way';
+/** The diner's overall opinion of the whole pizza. */
+export type Verdict = 'good' | 'ok' | 'bad';
 
 /** A piece of private intel delivered to one player. */
 export interface Report {
@@ -25,6 +27,10 @@ export interface Report {
   ingredient: number;
   direction: Direction;
   magnitude: Magnitude | null;
+  /** Only when cfg.reportVerdict is on. */
+  verdict: Verdict | null;
+  /** Table the diner ate at (null for takeout). */
+  table: number | null;
   orderedAt: number;
   deliveredAt: number;
   source: 'waiter' | 'card';
@@ -86,7 +92,7 @@ export interface PublicWaiterView extends Leg {
 
 export type GameEvent =
   /** Private to the shop owner. */
-  | { type: 'tip'; t: number; restaurant: number; amount: number }
+  | { type: 'tip'; t: number; restaurant: number; amount: number; table: number | null }
   /** Private to the recipient. */
   | { type: 'report'; t: number; report: Report }
   | { type: 'headline'; t: number; ingredient: number }
@@ -129,5 +135,7 @@ export type Action =
   | { type: 'sendWaiter'; table: number }
   /** Have a free waiter follow one of YOUR customers to whatever table they pick. */
   | { type: 'followCustomer'; customer: number }
+  /** Call one of your waiters home. */
+  | { type: 'recallWaiter'; idx: number }
   /** Skip the rest of the blind pick phase. */
   | { type: 'ready' };

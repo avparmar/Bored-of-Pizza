@@ -20,15 +20,17 @@ const SEAT_OPTIONS: Seat[] = ['human', ...(Object.keys(STRATEGIES) as Seat[])];
 const settings = {
   seats: ['human', 'hybrid', 'analyst', 'hawk'] as Seat[],
   magnitude: 'none' as MagnitudeMode,
-  arrivalMeanSec: 1.5,
+  arrivalMeanSec: 1.2,
   seed: Math.floor(Math.random() * 1e6),
   reveal: false,
   skill: 'human' as BotSkill,
   tipK: 0.35,
-  shareFloor: 0,
+  shareFloor: 0.1,
   shareCap: 1,
   shiftIngredients: 2,
   shiftRamp: 0,
+  autoFollow: false,
+  verdict: false,
 };
 
 // ------------------------------------------------------------------ state
@@ -40,6 +42,14 @@ let draft: Recipe = [11, 11, 11, 11];
 let lastUi = 0;
 let lastFrame = performance.now();
 let latestIds: number[] = [];
+/** Your recent tips, for the tip meter and the new-player nudge. */
+let myTips: { t: number; amount: number }[] = [];
+/** Public money/served once a second, to estimate rivals' tip per customer. */
+let publicHist: { t: number; money: number[]; served: number[] }[] = [];
+let nudgeShown = false;
+let recipeChangedAt: number[] = [];
+let trendFlash: { ingredient: number; until: number } | null = null;
+let bannerTimer: number | undefined;
 
 // ------------------------------------------------------------------ start / restart
 
@@ -57,6 +67,8 @@ function start(seats: Seat[]) {
       shareCap: settings.shareCap,
       trendShiftIngredients: settings.shiftIngredients,
       trendShiftRampSec: settings.shiftRamp,
+      autoFollow: settings.autoFollow,
+      reportVerdict: settings.verdict,
     },
   });
   if (session.human === null) session.ready(); // spectators skip the blind pick
@@ -67,10 +79,19 @@ function start(seats: Seat[]) {
   $('intel-latest').innerHTML = '';
   $('intel-history').innerHTML = '';
   latestIds = [];
+  myTips = [];
+  publicHist = [];
+  nudgeShown = false;
+  recipeChangedAt = [-99, -99, -99, -99];
+  trendFlash = null;
+  $('nudge').classList.add('hidden');
+  $('trend-banner').classList.add('hidden');
+  $('tip-meter').innerHTML = '';
   $('headline').textContent = human0(seats) ? 'Blind pick: choose your opening recipe.' : 'Doors open!';
   const human = session.human !== null;
   $('recipe-panel').classList.toggle('hidden', !human);
   $('intel-panel').classList.toggle('hidden', !human);
+  $('intel-strip').classList.toggle('hidden', !human);
   const tip = obs.startingIntel;
   $('tipoff').innerHTML = tip
     ? `🕵️ <b>Your tip-off:</b> at opening, customers want <b>${NAMES[tip.ingredient]} ${tip.value}</b>. Nobody else knows this one, and tastes drift.`
@@ -86,6 +107,8 @@ function human0(seats: Seat[]) {
 function newSeed() {
   settings.seed = Math.floor(Math.random() * 1e6);
   $<HTMLInputElement>('dbg-seed').value = String(settings.seed);
+  $<HTMLInputElement>('dbg-autofollow').checked = settings.autoFollow;
+  $<HTMLInputElement>('dbg-verdict').checked = settings.verdict;
 }
 
 function showStart() {
@@ -100,7 +123,9 @@ function showStart() {
         <li>First, a 20-second <b>blind pick</b>: choose your opening recipe while everyone else's is hidden.</li>
         <li><b>Click one of your customers</b> (in line or carrying your pizza) and a waiter follows them to
         their table. Or <b>click any table</b> to send a waiter there, including to spy on rivals' diners.
-        When the diner finishes, the waiter reports whether one ingredient should go <b>up</b> or <b>down</b>.</li>
+        When the diner finishes, the waiter reports whether one ingredient should go <b>up</b> or <b>down</b>.
+        <b>Right-click</b> a waiter (or their table) to call them home.</li>
+        <li>Your tips pop up over the table where the diner ate: a big tip means you're close.</li>
         <li>Better pizza brings more customers. Watch the headlines for big trend shifts.</li>
         <li>Most money after 10 minutes wins.</li>
       </ul>
@@ -205,7 +230,8 @@ function reportHtml(r: Report, me: number, t: number) {
     .map((v, i) => (i === r.ingredient ? `<b><u>${SHORT[i]}${v}</u></b>` : `${SHORT[i]}${v}`))
     .join(' ');
   const src = r.source === 'card' ? '💬 comment card' : '🧑‍🍳 waiter';
-  return `<div class="verdict ${r.direction}">${verdict}</div>
+  const thumbs = r.verdict ? ` <span title="diner's verdict">${{ good: '👍', ok: '😐', bad: '👎' }[r.verdict]}</span>` : '';
+  return `<div class="verdict ${r.direction}">${verdict}${thumbs}</div>
     <div class="recipe">${recipe}</div>
     <div class="meta">${whose} · ${src} · ordered ${Math.round(t - r.orderedAt)}s ago</div>`;
 }
@@ -219,7 +245,7 @@ function refreshIntel(obs: Observation) {
       (r) =>
         `<div class="report ${latestIds.includes(r.id) ? '' : 'new'}" style="border-left-color:${SHOP_COLORS[r.about]}">${reportHtml(r, obs.me, obs.t)}</div>`,
     )
-    .join('') || '<div class="meta" style="color:#8a7a68;font-size:13px">No reports yet. Click a table with a diner on it to send a waiter.</div>';
+    .join('') || '<div class="empty">No reports yet. Click one of your customers (or any table with a diner) to send a waiter.</div>';
   latestIds = ids;
   $('intel-count').textContent = String(mine.length);
   $('intel-rate').textContent = obs.t > 30 ? `${(mine.length / (obs.t / 60)).toFixed(1)}/min` : '';
@@ -231,6 +257,77 @@ function addHistory(r: Report, me: number, t: number) {
   li.style.borderLeftColor = SHOP_COLORS[r.about];
   li.innerHTML = reportHtml(r, me, t).replace(/ordered \d+s ago/, `at ${fmtClock(r.deliveredAt, false)}`);
   $('intel-history').prepend(li);
+}
+
+// ------------------------------------------------------------------ recipe board, tip meter, nudge
+
+function refreshRecipeBoard(obs: Observation) {
+  const s = session!;
+  const me = s.human ?? 0;
+  const mine = obs.recipes[me];
+  const hidden = obs.phase === 'pregame';
+  const order = [me, ...[0, 1, 2, 3].filter((p) => p !== me && p < obs.recipes.length)];
+  const head = `<tr><th></th>${SHORT.map(
+    (x, i) => `<th class="${trendFlash && trendFlash.ingredient === i && obs.t < trendFlash.until ? 'flash' : ''}">${x}</th>`,
+  ).join('')}</tr>`;
+  const rows = order
+    .map((p) => {
+      const isMe = p === s.human;
+      const name = isMe ? 'You' : SHOP_NAMES[p];
+      const changed = obs.t - recipeChangedAt[p] < 1.5 ? 'changed' : '';
+      const cells = obs.recipes[p]
+        .map((v, i) => {
+          if (hidden && !isMe) return '<td>?</td>';
+          if (isMe || s.human === null) return `<td>${v}</td>`;
+          const cmp = v > mine[i] ? '<span class="up">▲</span>' : v < mine[i] ? '<span class="down">▼</span>' : '<span class="same">=</span>';
+          return `<td>${v}${cmp}</td>`;
+        })
+        .join('');
+      return `<tr class="${isMe ? 'me' : ''} ${changed}"><td class="name"><span class="swatch" style="background:${SHOP_COLORS[p]}"></span> ${name}</td>${cells}</tr>`;
+    })
+    .join('');
+  $('board').innerHTML = head + rows;
+}
+
+function avg(xs: number[]) {
+  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+}
+
+function refreshTipMeter(obs: Observation) {
+  if (myTips.length === 0) {
+    $('tip-meter').innerHTML = obs.phase === 'open' ? 'Your tips: <b>—</b> (waiting for your first diner)' : '';
+    return;
+  }
+  const last = myTips.slice(-5).map((x) => x.amount);
+  const prev = myTips.slice(-10, -5).map((x) => x.amount);
+  const a = avg(last);
+  const trend = prev.length >= 3 ? (a > avg(prev) * 1.15 ? ' ▲' : a < avg(prev) * 0.85 ? ' ▼' : '') : '';
+  const color = a >= 6 ? '#1B6E2F' : a >= 3 ? '#A9820A' : '#C62828';
+  $('tip-meter').innerHTML = `Your tips (last ${last.length}): <b style="color:${color}">$${a.toFixed(2)}${trend}</b> <span style="color:#8a7a68">of $10 max</span>`;
+}
+
+/** One-time hint if rivals earn much more per customer than you: their recipes are closer. */
+function checkNudge(obs: Observation) {
+  const s = session!;
+  if (nudgeShown || s.human === null || obs.t < 60) return;
+  const then = publicHist.find((h) => h.t >= obs.t - 30);
+  const now = publicHist[publicHist.length - 1];
+  if (!then || !now || now.t - then.t < 20) return;
+  const mineRecent = myTips.filter((x) => x.t >= obs.t - 30).map((x) => x.amount);
+  if (mineRecent.length < 2) return;
+  let best = 0;
+  for (let p = 0; p < now.money.length; p++) {
+    if (p === s.human) continue;
+    const ds = now.served[p] - then.served[p];
+    if (ds >= 3) best = Math.max(best, (now.money[p] - then.money[p]) / ds);
+  }
+  if (best > 0 && avg(mineRecent) < best * 0.5) {
+    nudgeShown = true;
+    const n = $('nudge');
+    n.innerHTML = '💡 Rivals are earning much more per customer than you. Their recipes are probably closer to today\'s taste. Compare them on the recipe board.';
+    n.classList.remove('hidden');
+    window.setTimeout(() => n.classList.add('hidden'), 9000);
+  }
 }
 
 // ------------------------------------------------------------------ leaderboard, clock
@@ -272,21 +369,42 @@ function handleEvents(evs: GameEvent[], obs: Observation) {
   const s = session!;
   for (const e of evs) {
     if (e.type === 'tip' && s.human !== null) {
-      const d = obs.doorPos[s.human];
-      renderer.popup(`+$${e.amount.toFixed(2)}`, { x: d.x, y: d.y - 0.6 }, '#1B6E2F', obs.t);
+      myTips.push({ t: e.t, amount: e.amount });
+      // Pop up where the diner ate, which is where you're already looking.
+      const at = e.table !== null ? obs.tables[e.table].pos : obs.doorPos[s.human];
+      const color = e.amount >= 6 ? '#1B6E2F' : e.amount >= 3 ? '#A9820A' : '#C62828';
+      renderer.popup(`+$${e.amount.toFixed(2)}`, { x: at.x, y: at.y - 0.4 }, color, obs.t, 1.8, 0.75);
     } else if (e.type === 'headline') {
+      const name = INGREDIENTS[e.ingredient].toUpperCase();
       const h = $('headline');
-      h.textContent = `📰 TREND ALERT! Everyone's suddenly talking about ${INGREDIENTS[e.ingredient].toUpperCase()}…`;
+      h.textContent = `📰 TREND ALERT! Everyone's suddenly talking about ${name}…`;
       h.classList.remove('flash');
       void h.offsetWidth;
       h.classList.add('flash');
+      trendFlash = { ingredient: e.ingredient, until: obs.t + 20 };
+      const b = $('trend-banner');
+      b.innerHTML = `📰 TREND ALERT: ${name}!<small>Tastes just shifted. Your recipe may be way off now.</small>`;
+      b.classList.remove('hidden');
+      window.clearTimeout(bannerTimer);
+      bannerTimer = window.setTimeout(() => b.classList.add('hidden'), 4000);
+    } else if (e.type === 'recipe') {
+      recipeChangedAt[e.restaurant] = obs.t;
+      if (e.restaurant !== s.human && obs.t > 0.5) {
+        const p = obs.restaurantPos[e.restaurant];
+        renderer.popup('new recipe', { x: p.x, y: p.y + (p.y < 10 ? 3 : -3) }, SHOP_COLORS[e.restaurant], obs.t);
+      }
     } else if (e.type === 'report' && s.human !== null) {
       addHistory(e.report, s.human, obs.t);
+      const r = e.report;
+      if (r.table !== null) {
+        const arrow = r.direction === 'higher' ? '▲' : r.direction === 'lower' ? '▼' : '✓';
+        const color = r.direction === 'higher' ? '#1E88E5' : r.direction === 'lower' ? '#E53935' : '#2EAD4B';
+        const text = `${r.source === 'card' ? '💬 ' : ''}${SHORT[r.ingredient]}${arrow}`;
+        const p = obs.tables[r.table].pos;
+        renderer.popup(text, { x: p.x, y: p.y + 0.9 }, color, obs.t, 2.6, 0.9);
+      }
     } else if (e.type === 'blocked' && s.human !== null) {
       renderer.popup('Taken!', obs.tables[e.table].pos, '#C62828', obs.t);
-    } else if (e.type === 'recipe' && e.restaurant !== s.human) {
-      const p = obs.restaurantPos[e.restaurant];
-      renderer.popup('new recipe', { x: p.x, y: p.y + (p.y < 10 ? 3 : -3) }, SHOP_COLORS[e.restaurant], obs.t);
     }
   }
 }
@@ -306,9 +424,16 @@ function frame(now: number) {
       lastUi = now;
       refreshBoard(obs);
       refreshPregame(obs);
+      refreshRecipeBoard(obs);
+      if (publicHist.length === 0 || obs.t - publicHist[publicHist.length - 1].t >= 1) {
+        publicHist.push({ t: obs.t, money: [...obs.money], served: [...obs.served] });
+        if (publicHist.length > 90) publicHist.shift();
+      }
       if (session.human !== null) {
         refreshIntel(obs);
         refreshRecipe();
+        refreshTipMeter(obs);
+        checkNudge(obs);
       }
     }
     if (session.done && !$('overlay').innerHTML) {
@@ -348,6 +473,19 @@ canvas.addEventListener('click', (e) => {
   const obs = session.game.observe(session.human);
   const tb = renderer.tableAt(obs, e.offsetX, e.offsetY);
   if (tb !== null) session.act({ type: 'sendWaiter', table: tb });
+});
+// Right-click a waiter (or a table one of your waiters is headed to) to call them home.
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  if (!session || session.human === null) return;
+  let idx = renderer.waiterAt(e.offsetX, e.offsetY);
+  if (idx === null) {
+    const obs = session.game.observe(session.human);
+    const tb = renderer.tableAt(obs, e.offsetX, e.offsetY);
+    const w = obs.myWaiters.find((x) => tb !== null && x.target === tb);
+    if (w) idx = w.idx;
+  }
+  if (idx !== null) session.act({ type: 'recallWaiter', idx });
 });
 $('btn-ready').onclick = () => session?.ready();
 
@@ -393,6 +531,8 @@ function toggleDebug() {
   $<HTMLInputElement>('dbg-shift-n').value = String(settings.shiftIngredients);
   $<HTMLInputElement>('dbg-ramp').value = String(settings.shiftRamp);
   $<HTMLInputElement>('dbg-seed').value = String(settings.seed);
+  $<HTMLInputElement>('dbg-autofollow').checked = settings.autoFollow;
+  $<HTMLInputElement>('dbg-verdict').checked = settings.verdict;
 }
 $('btn-debug').onclick = toggleDebug;
 $('dbg-close').onclick = () => $('debug').classList.add('hidden');
@@ -405,7 +545,9 @@ $('dbg-restart').onclick = () => {
     if (s === 'human' && i !== firstHuman) seats[i] = 'hybrid';
   });
   settings.magnitude = $<HTMLSelectElement>('dbg-magnitude').value as MagnitudeMode;
-  settings.arrivalMeanSec = Number($<HTMLInputElement>('dbg-arrival').value) || 1.5;
+  settings.arrivalMeanSec = Number($<HTMLInputElement>('dbg-arrival').value) || 1.2;
+  settings.autoFollow = $<HTMLInputElement>('dbg-autofollow').checked;
+  settings.verdict = $<HTMLInputElement>('dbg-verdict').checked;
   settings.seed = Number($<HTMLInputElement>('dbg-seed').value) || 1;
   settings.skill = $<HTMLSelectElement>('dbg-skill').value as BotSkill;
   const num = (id: string, d: number) => {
@@ -413,7 +555,7 @@ $('dbg-restart').onclick = () => {
     return Number.isFinite(v) ? v : d;
   };
   settings.tipK = num('dbg-tipk', 0.35);
-  settings.shareFloor = num('dbg-floor', 0);
+  settings.shareFloor = num('dbg-floor', 0.1);
   settings.shareCap = num('dbg-cap', 1);
   settings.shiftIngredients = Math.max(1, Math.min(4, Math.round(num('dbg-shift-n', 2))));
   settings.shiftRamp = Math.max(0, num('dbg-ramp', 0));
@@ -428,6 +570,9 @@ requestAnimationFrame(frame);
 (window as unknown as { bop: unknown }).bop = {
   get session() {
     return session;
+  },
+  get nudgeShown() {
+    return nudgeShown;
   },
   renderer,
 };

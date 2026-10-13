@@ -61,6 +61,10 @@ export interface Config {
   waiterIdleReturnSec: number;
   /** Customers walk in from an entrance to the shop, and walk out after eating. */
   customerWalkIn: boolean;
+  /** Game setting: a free waiter automatically follows each of your customers to their table. */
+  autoFollow: boolean;
+  /** Reports also carry the diner's overall verdict on the pizza (good / ok / bad). */
+  reportVerdict: boolean;
   /** Chance each of your own customers leaves you a comment card when done eating. */
   commentCardRate: number;
   magnitude: MagnitudeMode;
@@ -102,22 +106,24 @@ export const defaultConfig: Config = {
   shareWindow: 10,
   shareP: 1,
   shareMaxAgeSec: 30,
-  shareFloor: 0,
+  shareFloor: 0.1,
   shareCap: 1,
   queuePenalty: 0.15,
 
-  arrivalMeanSec: 1.5,
+  arrivalMeanSec: 1.2,
   serviceSec: 1.5,
-  eatSec: 4.5,
+  eatSec: 6,
   courtSize: 20,
   customerSpeed: 2.5,
-  waiterSpeed: 3,
+  waiterSpeed: 4,
   tableGrid: 4,
 
   waitersPerPlayer: 2,
   waiterAutoReturn: true,
   waiterIdleReturnSec: 3,
   customerWalkIn: true,
+  autoFollow: false,
+  reportVerdict: false,
   commentCardRate: 1 / 8,
   magnitude: 'none',
   magnitudeBuckets: [0.1, 0.3],
