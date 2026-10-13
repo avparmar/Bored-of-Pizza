@@ -199,6 +199,20 @@ describe('Waiter controls', () => {
   });
 });
 
+describe('Report ingredient bag', () => {
+  it('every block of 4 reports to a player covers all four ingredients', () => {
+    const g = new Game(makeConfig({ seed: 21, autoFollow: true }));
+    while (!g.done) g.step();
+    for (let p = 0; p < 4; p++) {
+      const ings = g.reportLog.filter((r) => r.to === p).map((r) => r.ingredient);
+      expect(ings.length).toBeGreaterThan(8);
+      for (let k = 0; k + 4 <= ings.length; k += 4) {
+        expect(new Set(ings.slice(k, k + 4)).size).toBe(4);
+      }
+    }
+  });
+});
+
 describe('Shares and shifts', () => {
   it('clampShares keeps every share within floor and cap', () => {
     const s = clampShares([100, 1, 1, 1], 0.1, 0.45);

@@ -136,6 +136,8 @@ export class Game {
   readonly startingIntel: ({ ingredient: number; value: number } | null)[];
   readonly headlines: Headline[] = [];
   private readonly events: GameEvent[][];
+  /** Per-player shuffled ingredient bags for reports. */
+  private readonly reportBags: number[][];
 
   // Logs for analysis
   readonly snapshots: Snapshot[] = [];
@@ -177,6 +179,7 @@ export class Game {
     this.cooking = new Array(n).fill(null);
     this.reports = Array.from({ length: n }, () => []);
     this.events = Array.from({ length: n }, () => []);
+    this.reportBags = Array.from({ length: n }, () => []);
 
     const corners: Vec[] = [
       { x: 1, y: 1 },
@@ -477,9 +480,16 @@ export class Game {
     }
   }
 
+  private nextReportIngredient(to: number): number {
+    if (!this.cfg.reportBag) return this.rng.int(0, 3);
+    const bag = this.reportBags[to];
+    if (bag.length === 0) bag.push(...this.rng.shuffle([0, 1, 2, 3]));
+    return bag.pop()!;
+  }
+
   private deliverReport(to: number, c: Customer, source: 'waiter' | 'card') {
     const { cfg } = this;
-    const i = this.rng.int(0, 3);
+    const i = this.nextReportIngredient(to);
     const value = c.recipe![i];
     const idealV = c.idealAtOrder![i];
     const direction = directionOf(value, idealV);

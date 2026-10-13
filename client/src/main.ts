@@ -31,6 +31,7 @@ const settings = {
   shiftRamp: 0,
   autoFollow: false,
   verdict: false,
+  bag: true,
 };
 
 // ------------------------------------------------------------------ state
@@ -69,6 +70,7 @@ function start(seats: Seat[]) {
       trendShiftRampSec: settings.shiftRamp,
       autoFollow: settings.autoFollow,
       reportVerdict: settings.verdict,
+      reportBag: settings.bag,
     },
   });
   if (session.human === null) session.ready(); // spectators skip the blind pick
@@ -109,6 +111,7 @@ function newSeed() {
   $<HTMLInputElement>('dbg-seed').value = String(settings.seed);
   $<HTMLInputElement>('dbg-autofollow').checked = settings.autoFollow;
   $<HTMLInputElement>('dbg-verdict').checked = settings.verdict;
+  $<HTMLInputElement>('dbg-bag').checked = settings.bag;
 }
 
 function showStart() {
@@ -533,6 +536,7 @@ function toggleDebug() {
   $<HTMLInputElement>('dbg-seed').value = String(settings.seed);
   $<HTMLInputElement>('dbg-autofollow').checked = settings.autoFollow;
   $<HTMLInputElement>('dbg-verdict').checked = settings.verdict;
+  $<HTMLInputElement>('dbg-bag').checked = settings.bag;
 }
 $('btn-debug').onclick = toggleDebug;
 $('dbg-close').onclick = () => $('debug').classList.add('hidden');
@@ -548,6 +552,7 @@ $('dbg-restart').onclick = () => {
   settings.arrivalMeanSec = Number($<HTMLInputElement>('dbg-arrival').value) || 1.2;
   settings.autoFollow = $<HTMLInputElement>('dbg-autofollow').checked;
   settings.verdict = $<HTMLInputElement>('dbg-verdict').checked;
+  settings.bag = $<HTMLInputElement>('dbg-bag').checked;
   settings.seed = Number($<HTMLInputElement>('dbg-seed').value) || 1;
   settings.skill = $<HTMLSelectElement>('dbg-skill').value as BotSkill;
   const num = (id: string, d: number) => {

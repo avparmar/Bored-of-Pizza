@@ -63,6 +63,11 @@ export interface Config {
   customerWalkIn: boolean;
   /** Game setting: a free waiter automatically follows each of your customers to their table. */
   autoFollow: boolean;
+  /**
+   * "Tetris bag" for report ingredients: each player's reports cycle through all four
+   * ingredients in a freshly shuffled order every 4 reports. false = fully random each time.
+   */
+  reportBag: boolean;
   /** Reports also carry the diner's overall verdict on the pizza (good / ok / bad). */
   reportVerdict: boolean;
   /** Chance each of your own customers leaves you a comment card when done eating. */
@@ -124,6 +129,7 @@ export const defaultConfig: Config = {
   customerWalkIn: true,
   autoFollow: false,
   reportVerdict: false,
+  reportBag: true,
   commentCardRate: 1 / 8,
   magnitude: 'none',
   magnitudeBuckets: [0.1, 0.3],
