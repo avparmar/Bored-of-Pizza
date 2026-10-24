@@ -1,0 +1,24 @@
+{
+  "name": "bored-of-pizza",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "core",
+    "sim",
+    "client"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "sim": "tsx sim/src/run.ts",
+    "experiments": "tsx sim/src/experiments.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "npm run dev -w client",
+    "build": "npm run build -w client"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^5.0.4"
+  }
+}
